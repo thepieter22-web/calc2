@@ -42,12 +42,18 @@ ${JSON.stringify(body, null, 2)}`;
     });
 
     if (!r.ok) {
-      const details = await r.text();
-      return NextResponse.json(
-        { ok: false, message: "OpenAI request failed", details },
-        { status: 500 }
-      );
-    }
+  const details = await r.text();
+  return NextResponse.json(
+    {
+      ok: false,
+      message: "OpenAI request failed",
+      status: r.status,
+      statusText: r.statusText,
+      details,
+    },
+    { status: 500 }
+  );
+}
 
     const data = await r.json();
 
