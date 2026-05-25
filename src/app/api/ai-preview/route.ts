@@ -14,3 +14,11 @@ export async function POST(req: Request) {
     receivedKeys: Object.keys(body ?? {})
   });
 }
+import { NextResponse } from "next/server";
+
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    message: "ai-preview endpoint is live. Use POST for generation.",
+  });
+}
