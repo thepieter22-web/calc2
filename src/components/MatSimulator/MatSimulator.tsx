@@ -41,7 +41,10 @@ export default function MatSimulator() {
   const [dragging, setDragging] = useState(false);
   const dragOffset = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
 
-  // ✅ Nieuw: render preview afbeelding (PNG) om te tonen in modal
+  // Status tekst onder de knoppen (optioneel)
+  const [status, setStatus] = useState<string>("");
+
+  // ✅ NIEUW: URL van de gerenderde preview (PNG)
   const [renderPreviewUrl, setRenderPreviewUrl] = useState<string | null>(null);
 
   const selectedPreset = useMemo(() => {
@@ -310,3 +313,381 @@ export default function MatSimulator() {
     }));
   }
 
+  function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
+    setDragging(false);
+    (e.currentTarget as any).releasePointerCapture?.(e.pointerId);
+  }
+
+  function exportPng() {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const url = canvas.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `carpetz-preview-${config.widthMm}x${config.heightMm}mm.png`;
+    a.click();
+  }
+
+  // ✅ NIEUW: "AI preview (beta)" toont gewoon de huidige canvas render als foto
+  function showRenderPreview() {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const url = canvas.toDataURL("image/png");
+    setRenderPreviewUrl(url);
+
+    // optioneel klein statusbericht
+    setStatus("Render preview gegenereerd.");
+    setTimeout(() => setStatus(""), 2500);
+  }
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <section className="lg:col-span-5 bg-white rounded-2xl border border-neutral-200 p-5">
+        <h2 className="text-xl font-semibold">Instellingen</h2>
+        <p className="text-sm text-neutral-600 mt-1">Alles in millimeters (mm).</p>
+
+        <div className="mt-5 space-y-4">
+          <div>
+            <label className="text-sm font-medium">Type mat</label>
+            <div className="mt-2 flex gap-2">
+              <ToggleButton active={config.use === "binnen"} onClick={() => setConfig((c) => ({ ...c, use: "binnen" }))}>
+                Binnen
+              </ToggleButton>
+              <ToggleButton active={config.use === "buiten"} onClick={() => setConfig((c) => ({ ...c, use: "buiten" }))}>
+                Buiten
+              </ToggleButton>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">Plaatsing</label>
+            <div className="mt-2 flex gap-2">
+              <ToggleButton active={config.placement === "vloer"} onClick={() => setConfig((c) => ({ ...c, placement: "vloer" }))}>
+                Op de vloer
+              </ToggleButton>
+              <ToggleButton
+                active={config.placement === "vloerkader"}
+                onClick={() => setConfig((c) => ({ ...c, placement: "vloerkader" }))}
+              >
+                In vloerkader
+              </ToggleButton>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">Oriëntatie</label>
+            <div className="mt-2 flex gap-2">
+              <ToggleButton
+                active={config.orientation === "liggend"}
+                onClick={() => setConfig((c) => ({ ...c, orientation: "liggend" }))}
+              >
+                Liggend
+              </ToggleButton>
+              <ToggleButton
+                active={config.orientation === "staand"}
+                onClick={() => setConfig((c) => ({ ...c, orientation: "staand" }))}
+              >
+                Staand
+              </ToggleButton>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <label className="text-sm font-medium">Rubberen rand</label>
+              <p className="text-xs text-neutral-500">Dikke beschermrand rond de mat</p>
+            </div>
+            <input
+              type="checkbox"
+              className="h-5 w-5"
+              checked={config.rubberRand}
+              onChange={(e) => setConfig((c) => ({ ...c, rubberRand: e.target.checked }))}
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">Maat</label>
+            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <select
+                className="w-full border border-neutral-300 rounded-xl px-3 py-2"
+                value={config.presetId}
+                onChange={(e) => setConfig((c) => ({ ...c, presetId: e.target.value as any }))}
+              >
+                {SIZE_PRESETS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+                <option value="custom">Maat op keuze</option>
+              </select>
+
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <input
+                    type="number"
+                    min={200}
+                    max={4000}
+                    step={10}
+                    className="w-full border border-neutral-300 rounded-xl px-3 py-2"
+                    value={config.widthMm}
+                    onChange={(e) =>
+                      setConfig((c) => ({ ...c, presetId: "custom", widthMm: Number(e.target.value) }))
+                    }
+                    placeholder="Breedte (mm)"
+                  />
+                  <p className="text-xs text-neutral-500 mt-1">Breedte (mm)</p>
+                </div>
+                <div className="flex-1">
+                  <input
+                    type="number"
+                    min={200}
+                    max={4000}
+                    step={10}
+                    className="w-full border border-neutral-300 rounded-xl px-3 py-2"
+                    value={config.heightMm}
+                    onChange={(e) =>
+                      setConfig((c) => ({ ...c, presetId: "custom", heightMm: Number(e.target.value) }))
+                    }
+                    placeholder="Hoogte (mm)"
+                  />
+                  <p className="text-xs text-neutral-500 mt-1">Hoogte (mm)</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <label className="text-sm font-medium">Kleur mat</label>
+              <p className="text-xs text-neutral-500">Kies de basiskleur</p>
+            </div>
+            <input
+              type="color"
+              value={config.matColor}
+              onChange={(e) => setConfig((c) => ({ ...c, matColor: e.target.value }))}
+              className="h-10 w-12 p-1 rounded-xl border border-neutral-300 bg-white"
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">Logo upload</label>
+            <div className="mt-2 flex items-center gap-3">
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => void onLogoFile(e.target.files?.[0] ?? null)}
+                className="block w-full text-sm"
+              />
+              <button
+                type="button"
+                className="px-3 py-2 rounded-xl border border-neutral-300 hover:bg-neutral-50"
+                onClick={() => setLogo(DEFAULT_LOGO)}
+              >
+                Reset
+              </button>
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+              <Range
+                label="Logo grootte"
+                value={logo.scale}
+                min={0.2}
+                max={3}
+                step={0.05}
+                onChange={(v) => setLogo((l) => ({ ...l, scale: v }))}
+                suffix="×"
+              />
+              <Range
+                label="Logo rotatie"
+                value={logo.rotationDeg}
+                min={-180}
+                max={180}
+                step={1}
+                onChange={(v) => setLogo((l) => ({ ...l, rotationDeg: v }))}
+                suffix="°"
+              />
+              <Range
+                label="Logo opacity"
+                value={logo.opacity}
+                min={0.2}
+                max={1}
+                step={0.05}
+                onChange={(v) => setLogo((l) => ({ ...l, opacity: v }))}
+              />
+              <div className="flex items-end gap-2">
+                <button
+                  type="button"
+                  className="w-full px-3 py-2 rounded-xl bg-neutral-900 text-white hover:bg-neutral-800"
+                  onClick={exportPng}
+                >
+                  Export PNG
+                </button>
+
+                <button
+                  type="button"
+                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 hover:bg-neutral-50"
+                  onClick={showRenderPreview}
+                >
+                  AI preview (beta)
+                </button>
+              </div>
+            </div>
+
+            {status ? (
+              <p className="mt-3 text-sm text-neutral-700 bg-neutral-100 border border-neutral-200 rounded-xl p-3">
+                {status}
+              </p>
+            ) : null}
+          </div>
+
+          <details>
+            <summary className="cursor-pointer text-sm text-neutral-700">Toon configuratie (JSON)</summary>
+            <pre className="mt-2 text-xs bg-neutral-50 border border-neutral-200 rounded-xl p-3 overflow-auto">
+              {JSON.stringify({ config, logo: { ...logo, dataUrl: logo.dataUrl ? "[dataUrl]" : undefined } }, null, 2)}
+            </pre>
+          </details>
+        </div>
+      </section>
+
+      <section className="lg:col-span-7 bg-white rounded-2xl border border-neutral-200 p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold">Preview</h2>
+            <p className="text-sm text-neutral-600 mt-1">
+              Sleep het logo op de mat. Gebruik sliders om te schalen/roteren.
+            </p>
+          </div>
+          <span className="text-xs text-neutral-500">
+            Canvas: {PREVIEW.canvasW}×{PREVIEW.canvasH}px
+          </span>
+        </div>
+
+        <div className="mt-4 rounded-2xl border border-neutral-200 overflow-hidden bg-neutral-50">
+          <canvas
+            ref={canvasRef}
+            width={PREVIEW.canvasW}
+            height={PREVIEW.canvasH}
+            className="w-full h-auto touch-none"
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerUp}
+          />
+        </div>
+
+        <p className="mt-3 text-xs text-neutral-500">Tip: upload een PNG met transparante achtergrond.</p>
+      </section>
+
+      {/* ✅ NIEUW: Modal met gerenderde PNG */}
+      {renderPreviewUrl ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
+          onClick={() => setRenderPreviewUrl(null)}
+        >
+          <div
+            className="w-full max-w-4xl rounded-2xl bg-white p-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <div className="font-semibold">Render preview</div>
+              <button
+                className="rounded-xl border border-neutral-300 px-3 py-2 hover:bg-neutral-50"
+                onClick={() => setRenderPreviewUrl(null)}
+              >
+                Sluiten
+              </button>
+            </div>
+
+            <img
+              src={renderPreviewUrl}
+              alt="Gerenderde logomat preview"
+              className="w-full h-auto rounded-xl border border-neutral-200"
+            />
+
+            <div className="mt-3 flex gap-2">
+              <a
+                href={renderPreviewUrl}
+                download={`carpetz-render-preview-${config.widthMm}x${config.heightMm}mm.png`}
+                className="rounded-xl bg-neutral-900 text-white px-4 py-2 hover:bg-neutral-800"
+              >
+                Download PNG
+              </a>
+              <button
+                className="rounded-xl border border-neutral-300 px-4 py-2 hover:bg-neutral-50"
+                onClick={() => setRenderPreviewUrl(null)}
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ToggleButton({
+  active,
+  onClick,
+  children
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "px-3 py-2 rounded-xl border text-sm transition",
+        active
+          ? "bg-neutral-900 text-white border-neutral-900"
+          : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50"
+      ].join(" ")}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Range({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+  suffix
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (v: number) => void;
+  suffix?: string;
+}) {
+  const decimals = label.includes("rotatie") ? 0 : 2;
+  return (
+    <div className="border border-neutral-200 rounded-xl p-3">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium">{label}</span>
+        <span className="text-xs text-neutral-600">
+          {value.toFixed(decimals)}
+          {suffix ?? ""}
+        </span>
+      </div>
+      <input
+        type="range"
+        className="w-full mt-2"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+    </div>
+  );
+}
