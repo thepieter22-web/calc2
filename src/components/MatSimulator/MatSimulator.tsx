@@ -371,11 +371,52 @@ function getHandleAtPoint(
   }
 
 function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-  if (!logo.dataUrl) return;
+  // Als er geen logo is: niets selecteren
+  if (!logo.dataUrl) {
+    setLogoSelected(false);
+    return;
+  }
 
   const rect = e.currentTarget.getBoundingClientRect();
   const x = ((e.clientX - rect.left) / rect.width) * PREVIEW.canvasW;
   const y = ((e.clientY - rect.top) / rect.height) * PREVIEW.canvasH;
+
+  // 1) Als handles zichtbaar zijn: check eerst of je op een handle klikt
+  if (logoSelected) {
+    const handle = getHandleAtPoint(x, y);
+    if (handle) {
+      setResizeHandle(handle);
+
+      const b = logoBoxRef.current;
+      if (b) {
+        const dist = Math.hypot(x - b.cx, y - b.cy);
+        resizeStartRef.current = {
+          startScale: logo.scale,
+          startDist: Math.max(dist, 1)
+        };
+      }
+
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
+  }
+
+  // 2) Klik in het logo? => selecteer + start drag
+  if (isPointInLogoBox(x, y)) {
+    setLogoSelected(true);
+
+    setDragging(true);
+    dragOffset.current = { dx: logo.x - x, dy: logo.y - y };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    return;
+  }
+
+  // 3) Klik buiten logo (bv. op zwart) => deselect + handles weg
+  setLogoSelected(false);
+  setDragging(false);
+  setResizeHandle(null);
+  resizeStartRef.current = null;
+}
 
   // ✅ eerst checken of je op een hoek-handle zit
   const handle = getHandleAtPoint(x, y);
