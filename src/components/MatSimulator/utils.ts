@@ -31,3 +31,36 @@ export function loadImage(dataUrl: string) {
 export function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
+// Verwijder (bijna) witte achtergrond door die pixels transparant te maken.
+// threshold: hoe hoger, hoe "witter" een pixel moet zijn om verwijderd te worden (0-255).
+export async function removeWhiteBackground(dataUrl: string, threshold = 245) {
+  const img = await loadImage(dataUrl);
+
+  const c = document.createElement("canvas");
+  c.width = img.width;
+  c.height = img.height;
+
+  const ctx = c.getContext("2d");
+  if (!ctx) return dataUrl;
+
+  ctx.drawImage(img, 0, 0);
+
+  const imageData = ctx.getImageData(0, 0, c.width, c.height);
+  const d = imageData.data;
+
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i];
+    const g = d[i + 1];
+    const b = d[i + 2];
+
+    // Als pixel (bijna) wit is → maak transparant
+    if (r >= threshold && g >= threshold && b >= threshold) {
+      d[i + 3] = 0; // alpha = 0
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+
+  // output is altijd png zodat transparantie behouden blijft
+  return c.toDataURL("image/png");
+}
