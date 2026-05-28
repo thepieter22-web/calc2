@@ -155,7 +155,7 @@ export default function MatSimulator() {
     grad.addColorStop(1, shade(color, -10));
 
     ctx.fillStyle = grad;
-    roundRect(ctx, x, y, w, h, 18);
+    roundRect(ctx, x, y, w, h, r);
     ctx.fill();
 
     ctx.save();
@@ -176,12 +176,12 @@ export default function MatSimulator() {
     ctx.save();
     ctx.strokeStyle = "rgba(0,0,0,0.55)";
     ctx.lineWidth = 10;
-    roundRect(ctx, x + 4, y + 4, w - 8, h - 8, 16);
+    roundRect(ctx, x + 4, y + 4, w - 8, h - 8, r);
     ctx.stroke();
 
     ctx.strokeStyle = "rgba(255,255,255,0.18)";
     ctx.lineWidth = 3;
-    roundRect(ctx, x + 10, y + 10, w - 20, h - 20, 14);
+    roundRect(ctx, x + 10, y + 10, w - 20, h - 20, r);
     ctx.stroke();
     ctx.restore();
   }
@@ -196,7 +196,7 @@ export default function MatSimulator() {
   ctx.save();
   ctx.strokeStyle = "rgba(0,0,0,0.2)";
   ctx.lineWidth = 1;
-  roundRect(ctx, matX, matY, matW, matH, 18);
+  roundRect(ctx, matX, matY, matW, matH, r);
   ctx.stroke();
   ctx.restore();
 }
