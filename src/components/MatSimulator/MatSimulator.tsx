@@ -365,22 +365,44 @@ function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
 }
 
   function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!dragging) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * PREVIEW.canvasW;
-    const y = ((e.clientY - rect.top) / rect.height) * PREVIEW.canvasH;
+  const rect = e.currentTarget.getBoundingClientRect();
+  const x = ((e.clientX - rect.left) / rect.width) * PREVIEW.canvasW;
+  const y = ((e.clientY - rect.top) / rect.height) * PREVIEW.canvasH;
 
-    setLogo((l) => ({
-      ...l,
-      x: x + dragOffset.current.dx,
-      y: y + dragOffset.current.dy
-    }));
+  // ✅ RESIZE
+  if (resizeHandle) {
+    const b = logoBoxRef.current;
+    const s = resizeStartRef.current;
+    if (!b || !s) return;
+
+    const dist = Math.hypot(x - b.cx, y - b.cy);
+    const factor = dist / s.startDist;
+
+    const nextScale = clamp(s.startScale * factor, 0.2, 3);
+    setLogo((l) => ({ ...l, scale: nextScale }));
+    return;
   }
+
+  // ✅ DRAG
+  if (!dragging) return;
+
+  setLogo((l) => ({
+    ...l,
+    x: x + dragOffset.current.dx,
+    y: y + dragOffset.current.dy
+  }));
+}
+
 
   function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
-    setDragging(false);
-    (e.currentTarget as any).releasePointerCapture?.(e.pointerId);
-  }
+  setDragging(false);
+
+  setResizeHandle(null);
+  resizeStartRef.current = null;
+
+  (e.currentTarget as any).releasePointerCapture?.(e.pointerId);
+}
+
 
   function exportPng() {
     const canvas = canvasRef.current;
