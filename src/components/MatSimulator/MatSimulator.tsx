@@ -151,7 +151,7 @@ const r = config.placement === "vloer" || config.placement === "vloerkader" ? 0 
         ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
         ctx.restore();
 
-        drawLogoGuides(ctx, logo.x, logo.y);
+        drawLogoGuides(ctx, logo.x, logo.y);drawResizeHandles(ctx);
       } catch {
         // ignore
       }
