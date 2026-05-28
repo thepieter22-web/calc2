@@ -418,26 +418,32 @@ function isPointInLogoBox(x: number, y: number) {
   );
 }
   
-  async function onLogoFile(file: File | null) {
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result);
-      setLogo((l) => ({
-        ...l,
-        dataUrl,
-        x: PREVIEW.canvasW / 2,
-        y: PREVIEW.canvasH / 2,
-        scale: 1,
-        rotationDeg: 0,
-        opacity: 1
-      }));
-    };
-    reader.readAsDataURL(file);
-  }
+async function onLogoFile(file: File | null) {
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = String(reader.result);
+
+    setLogo((l) => ({
+      ...l,
+      dataUrl,
+      x: PREVIEW.canvasW / 2,
+      y: PREVIEW.canvasH / 2,
+      scale: 1,
+      rotationDeg: 0,
+      opacity: 1
+    }));
+
+    // ✅ na upload meteen geselecteerd => handles zichtbaar
+    setLogoSelected(true);
+  };
+
+  reader.readAsDataURL(file);
+}
 
 function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-  // Als er geen logo is: niets selecteren
+  // geen logo => niets selecteren
   if (!logo.dataUrl) {
     setLogoSelected(false);
     return;
@@ -447,7 +453,7 @@ function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
   const x = ((e.clientX - rect.left) / rect.width) * PREVIEW.canvasW;
   const y = ((e.clientY - rect.top) / rect.height) * PREVIEW.canvasH;
 
-  // 1) Als handles zichtbaar zijn: check eerst of je op een handle klikt
+  // 1) als geselecteerd: eerst check handle
   if (logoSelected) {
     const handle = getHandleAtPoint(x, y);
     if (handle) {
@@ -467,37 +473,30 @@ function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     }
   }
 
-  // 2) Klik in het logo? => selecteer + start drag
+  // 2) klik in logo => selecteer + drag
   if (isPointInLogoBox(x, y)) {
     setLogoSelected(true);
 
     setDragging(true);
     dragOffset.current = { dx: logo.x - x, dy: logo.y - y };
+
     e.currentTarget.setPointerCapture(e.pointerId);
     return;
   }
 
-  // 3) Klik buiten logo (bv. op zwart) => deselect + handles weg
+  // 3) klik buiten logo (zwart) => deselect + handles weg
   setLogoSelected(false);
   setDragging(false);
   setResizeHandle(null);
   resizeStartRef.current = null;
 }
 
-
-
-  // ✅ anders: normaal draggen
-  setDragging(true);
-  dragOffset.current = { dx: logo.x - x, dy: logo.y - y };
-  (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-}
-
-  function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
   const rect = e.currentTarget.getBoundingClientRect();
   const x = ((e.clientX - rect.left) / rect.width) * PREVIEW.canvasW;
   const y = ((e.clientY - rect.top) / rect.height) * PREVIEW.canvasH;
 
-  // ✅ RESIZE
+  // ✅ RESIZE mode
   if (resizeHandle) {
     const b = logoBoxRef.current;
     const s = resizeStartRef.current;
@@ -511,7 +510,7 @@ function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     return;
   }
 
-  // ✅ DRAG
+  // ✅ DRAG mode
   if (!dragging) return;
 
   setLogo((l) => ({
@@ -521,15 +520,19 @@ function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
   }));
 }
 
-
-  function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
+function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
   setDragging(false);
 
   setResizeHandle(null);
   resizeStartRef.current = null;
 
-  (e.currentTarget as any).releasePointerCapture?.(e.pointerId);
+  try {
+    e.currentTarget.releasePointerCapture(e.pointerId);
+  } catch {
+    // ignore
+  }
 }
+
 
 
   function exportPng() {
