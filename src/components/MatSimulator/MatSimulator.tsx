@@ -37,6 +37,8 @@ export default function MatSimulator() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [config, setConfig] = useState<MatConfig>(DEFAULT_CONFIG);
   const [logo, setLogo] = useState<LogoState>(DEFAULT_LOGO);
+  // ✅ NIEUW: is het logo geselecteerd? (handles zichtbaar)
+const [logoSelected, setLogoSelected] = useState(false);
 
   const [dragging, setDragging] = useState(false);
   const dragOffset = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
@@ -151,7 +153,12 @@ const r = config.placement === "vloer" || config.placement === "vloerkader" ? 0 
         ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
         ctx.restore();
 
-        drawLogoGuides(ctx, logo.x, logo.y);drawResizeHandles(ctx);
+        
+if (logoSelected) {
+  drawLogoGuides(ctx, logo.x, logo.y);
+  drawResizeHandles(ctx);
+}
+
       } catch {
         // ignore
       }
@@ -292,6 +299,36 @@ const r = config.placement === "vloer" || config.placement === "vloerkader" ? 0 
 }
 ``
 function getHandleAtPoint(x: number, y: number): null | "nw" | "ne" | "sw" | "se" {
+  const b = logoBoxRef.current;
+  if (!b) return null;
+
+  const halfW = b.w / 2;
+  const halfH = b.h / 2;
+
+  const corners = [
+    { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
+    { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
+    { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
+    { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
+  ];
+
+  const R = 12;
+  for (const c of corners) {
+    const dx = x - c.x;
+    const dy = y - c.y;
+    if (dx * dx + dy * dy <= R * R) return c.id;
+  }
+  return null;
+}
+
+  function drawResizeHandles(ctx: CanvasRenderingContext2D) {
+  ...
+}
+
+function getHandleAtPoint(
+  x: number,
+  y: number
+): null | "nw" | "ne" | "sw" | "se" {
   const b = logoBoxRef.current;
   if (!b) return null;
 
