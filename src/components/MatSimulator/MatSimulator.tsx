@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { LogoState, MatConfig, PreviewSettings } from "./types";
 import { SIZE_PRESETS } from "./presets";
-import { adjustColorForUse, clamp, computeMmToPxScale, loadImage, removeWhiteBackground } from "./utils";
+import { adjustColorForUse, clamp, computeMmToPxScale, loadImage } from "./utils";
 
 const PREVIEW: PreviewSettings = {
   canvasW: 900,
@@ -239,30 +239,23 @@ const r = config.placement === "vloer" || config.placement === "vloerkader" ? 0 
       .padStart(2, "0")}`;
   }
 
- async function onLogoFile(file: File | null) {
-  if (!file) return;
-
-  const reader = new FileReader();
-  reader.onload = async () => {
-    const dataUrl = String(reader.result);
-
-    // ✅ NIEUW: probeer witte achtergrond weg te halen
-    const cleanedDataUrl = await removeWhiteBackground(dataUrl, 245);
-
-    setLogo((l) => ({
-      ...l,
-      dataUrl: cleanedDataUrl,
-      x: PREVIEW.canvasW / 2,
-      y: PREVIEW.canvasH / 2,
-      scale: 1,
-      rotationDeg: 0,
-      opacity: 1
-    }));
-  };
-
-  reader.readAsDataURL(file);
-}
-``
+  async function onLogoFile(file: File | null) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result);
+      setLogo((l) => ({
+        ...l,
+        dataUrl,
+        x: PREVIEW.canvasW / 2,
+        y: PREVIEW.canvasH / 2,
+        scale: 1,
+        rotationDeg: 0,
+        opacity: 1
+      }));
+    };
+    reader.readAsDataURL(file);
+  }
 
   function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
     if (!logo.dataUrl) return;
