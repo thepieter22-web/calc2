@@ -159,18 +159,7 @@ const r = config.placement === "vloer" || config.placement === "vloerkader" ? 0 
     roundRect(ctx, x, y, w, h, r);
     ctx.fill();
 
-    ctx.save();
-    ctx.globalAlpha = 0.08;
-    ctx.strokeStyle = "#000000";
-    ctx.lineWidth = 1;
-    for (let i = 0; i < 24; i++) {
-      const yy = y + (h / 24) * i;
-      ctx.beginPath();
-      ctx.moveTo(x + 10, yy);
-      ctx.lineTo(x + w - 10, yy);
-      ctx.stroke();
-    }
-    ctx.restore();
+    
   }
 
   function drawRubberBorder(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) { 
