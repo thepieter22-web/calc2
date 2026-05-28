@@ -297,7 +297,7 @@ if (logoSelected) {
   }
   ctx.restore();
 }
-``
+
 function getHandleAtPoint(x: number, y: number): null | "nw" | "ne" | "sw" | "se" {
   const b = logoBoxRef.current;
   if (!b) return null;
@@ -321,16 +321,7 @@ function getHandleAtPoint(x: number, y: number): null | "nw" | "ne" | "sw" | "se
   return null;
 }
 
-  function drawResizeHandles(ctx: CanvasRenderingContext2D) {
-  ...
-}
-
-function getHandleAtPoint(
-  x: number,
-  y: number
-): null | "nw" | "ne" | "sw" | "se" {
-  const b = logoBoxRef.current;
-  if (!b) return null;
+ 
 
   const halfW = b.w / 2;
   const halfH = b.h / 2;
@@ -350,7 +341,7 @@ function getHandleAtPoint(
   }
   return null;
 }
-``
+
   
   async function onLogoFile(file: File | null) {
     if (!file) return;
