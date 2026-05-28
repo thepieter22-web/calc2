@@ -35,41 +35,35 @@ const DEFAULT_LOGO: LogoState = {
 
 export default function MatSimulator() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
   const [config, setConfig] = useState<MatConfig>(DEFAULT_CONFIG);
   const [logo, setLogo] = useState<LogoState>(DEFAULT_LOGO);
-  // ✅ NIEUW: is het logo geselecteerd? (handles zichtbaar)
-const [logoSelected, setLogoSelected] = useState(false);
 
+  // selectie: handles enkel zichtbaar als geselecteerd
+  const [logoSelected, setLogoSelected] = useState(false);
+
+  // drag state
   const [dragging, setDragging] = useState(false);
   const dragOffset = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
 
-// ✅ NIEUW: onthoud de laatst getekende logo-box (voor handles)
-const logoBoxRef = useRef<{
-  cx: number;
-  cy: number;
-  w: number;
-  h: number;
-  rotationDeg: number;
-} | null>(null);
+  // resize state
+  const [resizeHandle, setResizeHandle] = useState<null | "nw" | "ne" | "sw" | "se">(null);
+  const resizeStartRef = useRef<{ startScale: number; startDist: number } | null>(null);
 
-// ✅ NIEUW: resize-state
-const [resizeHandle, setResizeHandle] = useState<null | "nw" | "ne" | "sw" | "se">(null);
-const resizeStartRef = useRef<{
-  startScale: number;
-  startDist: number;
-} | null>(null);
+  // logo box (laatst getekende bbox)
+  const logoBoxRef = useRef<{ cx: number; cy: number; w: number; h: number; rotationDeg: number } | null>(null);
 
-  
-  // Status tekst onder de knoppen (optioneel)
+  // cache geladen image (sneller dan telkens loadImage in render)
+  const logoImgRef = useRef<HTMLImageElement | null>(null);
+
   const [status, setStatus] = useState<string>("");
-
-  // ✅ NIEUW: URL van de gerenderde preview (PNG)
   const [renderPreviewUrl, setRenderPreviewUrl] = useState<string | null>(null);
 
   const selectedPreset = useMemo(() => {
     return SIZE_PRESETS.find((p) => p.id === config.presetId);
   }, [config.presetId]);
 
+  // preset -> breedte/hoogte invullen
   useEffect(() => {
     if (config.presetId !== "custom" && selectedPreset) {
       setConfig((c) => ({
@@ -80,12 +74,14 @@ const resizeStartRef = useRef<{
     }
   }, [config.presetId, selectedPreset]);
 
-useEffect(() => {
-  if (config.placement === "vloerkader" && config.rubberRand) {
-    setConfig((c) => ({ ...c, rubberRand: false }));
-  }
-}, [config.placement, config.rubberRand]);
-  
+  // vloerkader -> rubberrand automatisch uit
+  useEffect(() => {
+    if (config.placement === "vloerkader" && config.rubberRand) {
+      setConfig((c) => ({ ...c, rubberRand: false }));
+    }
+  }, [config.placement, config.rubberRand]);
+
+  // orientation -> swap indien nodig
   useEffect(() => {
     setConfig((c) => {
       const w = c.widthMm;
@@ -96,10 +92,34 @@ useEffect(() => {
     });
   }, [config.orientation]);
 
+  // laad logo image 1x bij wijziging dataUrl
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadLogo() {
+      if (!logo.dataUrl) {
+        logoImgRef.current = null;
+        return;
+      }
+      try {
+        const img = await loadImage(logo.dataUrl);
+        if (!cancelled) logoImgRef.current = img;
+      } catch {
+        if (!cancelled) logoImgRef.current = null;
+      }
+    }
+
+    void loadLogo();
+    return () => {
+      cancelled = true;
+    };
+  }, [logo.dataUrl]);
+
+  // render wanneer config of logo verandert
   useEffect(() => {
     void renderPreview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config, logo]);
+  }, [config, logo, logoSelected]);
 
   async function renderPreview() {
     const canvas = canvasRef.current;
@@ -119,64 +139,74 @@ useEffect(() => {
 
     const matX = (PREVIEW.canvasW - matWpx) / 2;
     const matY = (PREVIEW.canvasH - matHpx) / 2;
-const r = config.placement === "vloer" || config.placement === "vloerkader" ? 0 : 18;
+
+    // radius: enkel afgerond bij muur (zoals je had)
+    const r = config.placement === "vloer" || config.placement === "vloerkader" ? 0 : 18;
 
     drawScene(ctx, matX, matY, matWpx, matHpx);
 
     const baseColor = adjustColorForUse(config.matColor, config.use);
     drawMat(ctx, matX, matY, matWpx, matHpx, baseColor, r);
 
-    if (config.rubberRand) {
+    // rubberrand: niet bij vloerkader (kader is dan de omlijsting)
+    if (config.rubberRand && config.placement !== "vloerkader") {
       drawRubberBorder(ctx, matX, matY, matWpx, matHpx, r);
     }
 
-    if (logo.dataUrl) {
-      try {
-        const img = await loadImage(logo.dataUrl);
-        const target = Math.min(matWpx, matHpx) * 0.55;
-        const fitScale = Math.min(target / img.width, target / img.height);
-        const finalScale = fitScale * logo.scale;
-        const drawW = img.width * finalScale;
-        const drawH = img.height * finalScale;
-        logoBoxRef.current = {
-  cx: logo.x,
-  cy: logo.y,
-  w: drawW,
-  h: drawH,
-  rotationDeg: logo.rotationDeg
-};
+    // logo tekenen
+    const img = logoImgRef.current;
+    if (logo.dataUrl && img) {
+      const target = Math.min(matWpx, matHpx) * 0.55;
+      const fitScale = Math.min(target / img.width, target / img.height);
+      const finalScale = fitScale * logo.scale;
 
-        ctx.save();
-        ctx.globalAlpha = clamp(logo.opacity, 0, 1);
-        ctx.translate(logo.x, logo.y);
-        ctx.rotate((logo.rotationDeg * Math.PI) / 180);
-        ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
-        ctx.restore();
+      const drawW = img.width * finalScale;
+      const drawH = img.height * finalScale;
 
-        
-if (logoSelected) {
-  drawLogoGuides(ctx, logo.x, logo.y);
-  drawResizeHandles(ctx);
-}
+      // bbox bijhouden voor hit-tests & handles
+      logoBoxRef.current = {
+        cx: logo.x,
+        cy: logo.y,
+        w: drawW,
+        h: drawH,
+        rotationDeg: logo.rotationDeg
+      };
 
-      } catch {
-        // ignore
+      ctx.save();
+      ctx.globalAlpha = clamp(logo.opacity, 0, 1);
+      ctx.translate(logo.x, logo.y);
+      ctx.rotate((logo.rotationDeg * Math.PI) / 180);
+      ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+      ctx.restore();
+
+      // handles enkel als geselecteerd
+      if (logoSelected) {
+        drawLogoGuides(ctx, logo.x, logo.y);
+        drawResizeHandles(ctx);
       }
+    } else {
+      // geen logo => geen bbox
+      logoBoxRef.current = null;
     }
 
-    drawOverlay(ctx, matX, matY, matWpx, matHpx, r);
+    // overlay rand: NIET bij vloerkader (dan wil je geen zwarte boord)
+    if (config.placement !== "vloerkader") {
+      drawOverlay(ctx, matX, matY, matWpx, matHpx, r);
+    }
   }
 
   function drawScene(ctx: CanvasRenderingContext2D, matX: number, matY: number, matW: number, matH: number) {
     ctx.fillStyle = "#f5f5f5";
     ctx.fillRect(0, 0, PREVIEW.canvasW, PREVIEW.canvasH);
 
+    // schaduw
     ctx.save();
     ctx.fillStyle = "rgba(0,0,0,0.12)";
     ctx.filter = "blur(10px)";
     ctx.fillRect(matX + 8, matY + 10, matW, matH);
     ctx.restore();
 
+    // vloerkader als grijze omlijsting
     if (config.placement === "vloerkader") {
       const framePad = 16;
       ctx.fillStyle = "#d4d4d4";
@@ -195,11 +225,9 @@ if (logoSelected) {
     ctx.fillStyle = grad;
     roundRect(ctx, x, y, w, h, r);
     ctx.fill();
-
-    
   }
 
-  function drawRubberBorder(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) { 
+  function drawRubberBorder(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
     ctx.save();
     ctx.strokeStyle = "rgba(0,0,0,0.55)";
     ctx.lineWidth = 10;
@@ -213,21 +241,14 @@ if (logoSelected) {
     ctx.restore();
   }
 
-  function drawOverlay(
-  ctx: CanvasRenderingContext2D,
-  matX: number,
-  matY: number,
-  matW: number,
-  matH: number,
-  r : number
-) {
-  ctx.save();
-  ctx.strokeStyle = "rgba(0,0,0,0.2)";
-  ctx.lineWidth = 1;
-  roundRect(ctx, matX, matY, matW, matH, r);
-  ctx.stroke();
-  ctx.restore();
-}
+  function drawOverlay(ctx: CanvasRenderingContext2D, matX: number, matY: number, matW: number, matH: number, r: number) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(0,0,0,0.2)";
+    ctx.lineWidth = 1;
+    roundRect(ctx, matX, matY, matW, matH, r);
+    ctx.stroke();
+    ctx.restore();
+  }
 
   function drawLogoGuides(ctx: CanvasRenderingContext2D, cx: number, cy: number) {
     ctx.save();
@@ -249,6 +270,67 @@ if (logoSelected) {
     ctx.restore();
   }
 
+  function drawResizeHandles(ctx: CanvasRenderingContext2D) {
+    const b = logoBoxRef.current;
+    if (!b) return;
+
+    const halfW = b.w / 2;
+    const halfH = b.h / 2;
+
+    const corners = [
+      { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
+      { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
+      { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
+      { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
+    ];
+
+    ctx.save();
+    for (const c of corners) {
+      ctx.fillStyle = "#2563eb";
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 8, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = "white";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function getHandleAtPoint(x: number, y: number): null | "nw" | "ne" | "sw" | "se" {
+    const b = logoBoxRef.current;
+    if (!b) return null;
+
+    const halfW = b.w / 2;
+    const halfH = b.h / 2;
+
+    const corners = [
+      { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
+      { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
+      { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
+      { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
+    ];
+
+    const R = 12;
+    for (const c of corners) {
+      const dx = x - c.x;
+      const dy = y - c.y;
+      if (dx * dx + dy * dy <= R * R) return c.id;
+    }
+    return null;
+  }
+
+  function isPointInLogoBox(x: number, y: number) {
+    const b = logoBoxRef.current;
+    if (!b) return false;
+
+    const halfW = b.w / 2;
+    const halfH = b.h / 2;
+
+    return x >= b.cx - halfW && x <= b.cx + halfW && y >= b.cy - halfH && y <= b.cy + halfH;
+  }
+
   function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
     const radius = Math.min(r, w / 2, h / 2);
     ctx.beginPath();
@@ -262,278 +344,128 @@ if (logoSelected) {
 
   function shade(hex: string, amount: number) {
     const c = hex.replace("#", "");
-    const r = clamp(parseInt(c.slice(0, 2), 16) + amount, 0, 255);
-    const g = clamp(parseInt(c.slice(2, 4), 16) + amount, 0, 255);
-    const b = clamp(parseInt(c.slice(4, 6), 16) + amount, 0, 255);
-    return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b
+    const rr = clamp(parseInt(c.slice(0, 2), 16) + amount, 0, 255);
+    const gg = clamp(parseInt(c.slice(2, 4), 16) + amount, 0, 255);
+    const bb = clamp(parseInt(c.slice(4, 6), 16) + amount, 0, 255);
+    return `#${rr.toString(16).padStart(2, "0")}${gg.toString(16).padStart(2, "0")}${bb
       .toString(16)
       .padStart(2, "0")}`;
   }
 
-  function drawResizeHandles(ctx: CanvasRenderingContext2D) {
-  const b = logoBoxRef.current;
-  if (!b) return;
+  async function onLogoFile(file: File | null) {
+    if (!file) return;
 
-  const halfW = b.w / 2;
-  const halfH = b.h / 2;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result);
 
-  const corners = [
-    { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
-    { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
-    { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
-    { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
-  ];
+      setLogo((l) => ({
+        ...l,
+        dataUrl,
+        x: PREVIEW.canvasW / 2,
+        y: PREVIEW.canvasH / 2,
+        scale: 1,
+        rotationDeg: 0,
+        opacity: 1
+      }));
 
-  ctx.save();
-  for (const c of corners) {
-    ctx.fillStyle = "#2563eb";
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, 8, 0, Math.PI * 2);
-    ctx.fill();
+      setLogoSelected(true);
+    };
 
-    ctx.strokeStyle = "white";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function getHandleAtPoint(x: number, y: number): null | "nw" | "ne" | "sw" | "se" {
-  const b = logoBoxRef.current;
-  if (!b) return null;
-
-  const halfW = b.w / 2;
-  const halfH = b.h / 2;
-
-  const corners = [
-    { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
-    { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
-    { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
-    { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
-  ];
-
-  const R = 12;
-  for (const c of corners) {
-    const dx = x - c.x;
-    const dy = y - c.y;
-    if (dx * dx + dy * dy <= R * R) return c.id;
-  }
-  return null;
-}
-
- 
-
-  const halfW = b.w / 2;
-  const halfH = b.h / 2;
-
-  const corners = [
-    { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
-    { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
-    { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
-    { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
-  ];
-
-  const R = 12;
-  for (const c of corners) {
-    const dx = x - c.x;
-    const dy = y - c.y;
-    if (dx * dx + dy * dy <= R * R) return c.id;
-  }
-  return null;
-}
-
-function drawResizeHandles(ctx: CanvasRenderingContext2D) {
-  const b = logoBoxRef.current;
-  if (!b) return;
-
-  const halfW = b.w / 2;
-  const halfH = b.h / 2;
-
-  const corners = [
-    { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
-    { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
-    { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
-    { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
-  ];
-
-  ctx.save();
-  for (const c of corners) {
-    ctx.fillStyle = "#2563eb";
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, 8, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = "white";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function getHandleAtPoint(x: number, y: number): null | "nw" | "ne" | "sw" | "se" {
-  const b = logoBoxRef.current;
-  if (!b) return null;
-
-  const halfW = b.w / 2;
-  const halfH = b.h / 2;
-
-  const corners = [
-    { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
-    { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
-    { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
-    { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
-  ];
-
-  const R = 12;
-  for (const c of corners) {
-    const dx = x - c.x;
-    const dy = y - c.y;
-    if (dx * dx + dy * dy <= R * R) return c.id;
-  }
-  return null;
-}
-
-function isPointInLogoBox(x: number, y: number) {
-  const b = logoBoxRef.current;
-  if (!b) return false;
-
-  const halfW = b.w / 2;
-  const halfH = b.h / 2;
-
-  return x >= b.cx - halfW && x <= b.cx + halfW && y >= b.cy - halfH && y <= b.cy + halfH;
-}
-
-function isPointInLogoBox(x: number, y: number) {
-  const b = logoBoxRef.current;
-  if (!b) return false;
-
-  const halfW = b.w / 2;
-  const halfH = b.h / 2;
-
-  return (
-    x >= b.cx - halfW &&
-    x <= b.cx + halfW &&
-    y >= b.cy - halfH &&
-    y <= b.cy + halfH
-  );
-}
-  
-async function onLogoFile(file: File | null) {
-  if (!file) return;
-
-  const reader = new FileReader();
-  reader.onload = () => {
-    const dataUrl = String(reader.result);
-
-    setLogo((l) => ({
-      ...l,
-      dataUrl,
-      x: PREVIEW.canvasW / 2,
-      y: PREVIEW.canvasH / 2,
-      scale: 1,
-      rotationDeg: 0,
-      opacity: 1
-    }));
-
-    // ✅ na upload meteen geselecteerd => handles zichtbaar
-    setLogoSelected(true);
-  };
-
-  reader.readAsDataURL(file);
-}
-
-function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-  // geen logo => niets selecteren
-  if (!logo.dataUrl) {
-    setLogoSelected(false);
-    return;
+    reader.readAsDataURL(file);
   }
 
-  const rect = e.currentTarget.getBoundingClientRect();
-  const x = ((e.clientX - rect.left) / rect.width) * PREVIEW.canvasW;
-  const y = ((e.clientY - rect.top) / rect.height) * PREVIEW.canvasH;
+  function canvasPoint(e: React.PointerEvent<HTMLCanvasElement>) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * PREVIEW.canvasW;
+    const y = ((e.clientY - rect.top) / rect.height) * PREVIEW.canvasH;
+    return { x, y };
+  }
 
-  // 1) als geselecteerd: eerst check handle
-  if (logoSelected) {
-    const handle = getHandleAtPoint(x, y);
-    if (handle) {
-      setResizeHandle(handle);
+  function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
+    if (!logo.dataUrl) {
+      setLogoSelected(false);
+      return;
+    }
 
-      const b = logoBoxRef.current;
-      if (b) {
-        const dist = Math.hypot(x - b.cx, y - b.cy);
-        resizeStartRef.current = {
-          startScale: logo.scale,
-          startDist: Math.max(dist, 1)
-        };
+    const { x, y } = canvasPoint(e);
+
+    // 1) als geselecteerd: eerst handle check
+    if (logoSelected) {
+      const handle = getHandleAtPoint(x, y);
+      if (handle) {
+        setResizeHandle(handle);
+
+        const b = logoBoxRef.current;
+        if (b) {
+          const dist = Math.hypot(x - b.cx, y - b.cy);
+          resizeStartRef.current = {
+            startScale: logo.scale,
+            startDist: Math.max(dist, 1)
+          };
+        }
+
+        e.currentTarget.setPointerCapture(e.pointerId);
+        return;
       }
+    }
+
+    // 2) klik in logo => selecteer + drag
+    if (isPointInLogoBox(x, y)) {
+      setLogoSelected(true);
+
+      setDragging(true);
+      dragOffset.current = { dx: logo.x - x, dy: logo.y - y };
 
       e.currentTarget.setPointerCapture(e.pointerId);
       return;
     }
+
+    // 3) klik buiten logo => deselect
+    setLogoSelected(false);
+    setDragging(false);
+    setResizeHandle(null);
+    resizeStartRef.current = null;
   }
 
-  // 2) klik in logo => selecteer + drag
-  if (isPointInLogoBox(x, y)) {
-    setLogoSelected(true);
+  function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
+    const { x, y } = canvasPoint(e);
 
-    setDragging(true);
-    dragOffset.current = { dx: logo.x - x, dy: logo.y - y };
+    // RESIZE
+    if (resizeHandle) {
+      const b = logoBoxRef.current;
+      const s = resizeStartRef.current;
+      if (!b || !s) return;
 
-    e.currentTarget.setPointerCapture(e.pointerId);
-    return;
+      const dist = Math.hypot(x - b.cx, y - b.cy);
+      const factor = dist / s.startDist;
+
+      const nextScale = clamp(s.startScale * factor, 0.2, 3);
+      setLogo((l) => ({ ...l, scale: nextScale }));
+      return;
+    }
+
+    // DRAG
+    if (!dragging) return;
+
+    setLogo((l) => ({
+      ...l,
+      x: x + dragOffset.current.dx,
+      y: y + dragOffset.current.dy
+    }));
   }
 
-  // 3) klik buiten logo (zwart) => deselect + handles weg
-  setLogoSelected(false);
-  setDragging(false);
-  setResizeHandle(null);
-  resizeStartRef.current = null;
-}
+  function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
+    setDragging(false);
+    setResizeHandle(null);
+    resizeStartRef.current = null;
 
-function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
-  const rect = e.currentTarget.getBoundingClientRect();
-  const x = ((e.clientX - rect.left) / rect.width) * PREVIEW.canvasW;
-  const y = ((e.clientY - rect.top) / rect.height) * PREVIEW.canvasH;
-
-  // ✅ RESIZE mode
-  if (resizeHandle) {
-    const b = logoBoxRef.current;
-    const s = resizeStartRef.current;
-    if (!b || !s) return;
-
-    const dist = Math.hypot(x - b.cx, y - b.cy);
-    const factor = dist / s.startDist;
-
-    const nextScale = clamp(s.startScale * factor, 0.2, 3);
-    setLogo((l) => ({ ...l, scale: nextScale }));
-    return;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
   }
-
-  // ✅ DRAG mode
-  if (!dragging) return;
-
-  setLogo((l) => ({
-    ...l,
-    x: x + dragOffset.current.dx,
-    y: y + dragOffset.current.dy
-  }));
-}
-
-function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
-  setDragging(false);
-
-  setResizeHandle(null);
-  resizeStartRef.current = null;
-
-  try {
-    e.currentTarget.releasePointerCapture(e.pointerId);
-  } catch {
-    // ignore
-  }
-}
-
-
 
   function exportPng() {
     const canvas = canvasRef.current;
@@ -545,7 +477,6 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
     a.click();
   }
 
-  // ✅ NIEUW: "AI preview (beta)" toont gewoon de huidige canvas render als foto
   function showRenderPreview() {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -553,7 +484,6 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
     const url = canvas.toDataURL("image/png");
     setRenderPreviewUrl(url);
 
-    // optioneel klein statusbericht
     setStatus("Render preview gegenereerd.");
     setTimeout(() => setStatus(""), 2500);
   }
@@ -585,7 +515,7 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
               </ToggleButton>
               <ToggleButton
                 active={config.placement === "vloerkader"}
-                onClick={() => setConfig((c) => ({ ...c, placement: "vloerkader" }))}
+                onClick={() => setConfig((c) => ({ ...c, placement: "vloerkader", rubberRand: false }))}
               >
                 In vloerkader
               </ToggleButton>
@@ -611,20 +541,19 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
           </div>
 
           {config.placement !== "vloerkader" ? (
-  <div className="flex items-center justify-between gap-3">
-    <div>
-      <label className="text-sm font-medium">Rubberen rand</label>
-      <p className="text-xs text-neutral-500">Dikke beschermrand rond de mat</p>
-    </div>
-    <input
-      type="checkbox"
-      className="h-5 w-5"
-      checked={config.rubberRand}
-      onChange={(e) => setConfig((c) => ({ ...c, rubberRand: e.target.checked }))}
-    />
-  </div>
-) : null}
-
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <label className="text-sm font-medium">Rubberen rand</label>
+                <p className="text-xs text-neutral-500">Dikke beschermrand rond de mat</p>
+              </div>
+              <input
+                type="checkbox"
+                className="h-5 w-5"
+                checked={config.rubberRand}
+                onChange={(e) => setConfig((c) => ({ ...c, rubberRand: e.target.checked }))}
+              />
+            </div>
+          ) : null}
 
           <div>
             <label className="text-sm font-medium">Maat</label>
@@ -651,9 +580,7 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
                     step={10}
                     className="w-full border border-neutral-300 rounded-xl px-3 py-2"
                     value={config.widthMm}
-                    onChange={(e) =>
-                      setConfig((c) => ({ ...c, presetId: "custom", widthMm: Number(e.target.value) }))
-                    }
+                    onChange={(e) => setConfig((c) => ({ ...c, presetId: "custom", widthMm: Number(e.target.value) }))}
                     placeholder="Breedte (mm)"
                   />
                   <p className="text-xs text-neutral-500 mt-1">Breedte (mm)</p>
@@ -666,9 +593,7 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
                     step={10}
                     className="w-full border border-neutral-300 rounded-xl px-3 py-2"
                     value={config.heightMm}
-                    onChange={(e) =>
-                      setConfig((c) => ({ ...c, presetId: "custom", heightMm: Number(e.target.value) }))
-                    }
+                    onChange={(e) => setConfig((c) => ({ ...c, presetId: "custom", heightMm: Number(e.target.value) }))}
                     placeholder="Hoogte (mm)"
                   />
                   <p className="text-xs text-neutral-500 mt-1">Hoogte (mm)</p>
@@ -702,7 +627,10 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
               <button
                 type="button"
                 className="px-3 py-2 rounded-xl border border-neutral-300 hover:bg-neutral-50"
-                onClick={() => setLogo(DEFAULT_LOGO)}
+                onClick={() => {
+                  setLogo(DEFAULT_LOGO);
+                  setLogoSelected(false);
+                }}
               >
                 Reset
               </button>
@@ -749,15 +677,13 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
                   className="w-full px-3 py-2 rounded-xl border border-neutral-300 hover:bg-neutral-50"
                   onClick={showRenderPreview}
                 >
-                  AI preview (beta)
+                  Render preview
                 </button>
               </div>
             </div>
 
             {status ? (
-              <p className="mt-3 text-sm text-neutral-700 bg-neutral-100 border border-neutral-200 rounded-xl p-3">
-                {status}
-              </p>
+              <p className="mt-3 text-sm text-neutral-700 bg-neutral-100 border border-neutral-200 rounded-xl p-3">{status}</p>
             ) : null}
           </div>
 
@@ -774,9 +700,7 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
         <div className="flex items-start justify-between gap-3">
           <div>
             <h2 className="text-xl font-semibold">Preview</h2>
-            <p className="text-sm text-neutral-600 mt-1">
-              Sleep het logo op de mat. Gebruik sliders om te schalen/roteren.
-            </p>
+            <p className="text-sm text-neutral-600 mt-1">Klik op het logo om te selecteren. Klik op de achtergrond om te deselecteren.</p>
           </div>
           <span className="text-xs text-neutral-500">
             Canvas: {PREVIEW.canvasW}×{PREVIEW.canvasH}px
@@ -796,25 +720,15 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
           />
         </div>
 
-        <p className="mt-3 text-xs text-neutral-500">Tip: upload een PNG met transparante achtergrond.</p>
+        <p className="mt-3 text-xs text-neutral-500">Tip: upload liefst een PNG met transparante achtergrond.</p>
       </section>
 
-      {/* ✅ NIEUW: Modal met gerenderde PNG */}
       {renderPreviewUrl ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
-          onClick={() => setRenderPreviewUrl(null)}
-        >
-          <div
-            className="w-full max-w-4xl rounded-2xl bg-white p-4 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={() => setRenderPreviewUrl(null)}>
+          <div className="w-full max-w-4xl rounded-2xl bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="mb-3 flex items-center justify-between">
               <div className="font-semibold">Render preview</div>
-              <button
-                className="rounded-xl border border-neutral-300 px-3 py-2 hover:bg-neutral-50"
-                onClick={() => setRenderPreviewUrl(null)}
-              >
+              <button className="rounded-xl border border-neutral-300 px-3 py-2 hover:bg-neutral-50" onClick={() => setRenderPreviewUrl(null)}>
                 Sluiten
               </button>
             </div>
@@ -833,10 +747,7 @@ function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
               >
                 Download PNG
               </a>
-              <button
-                className="rounded-xl border border-neutral-300 px-4 py-2 hover:bg-neutral-50"
-                onClick={() => setRenderPreviewUrl(null)}
-              >
+              <button className="rounded-xl border border-neutral-300 px-4 py-2 hover:bg-neutral-50" onClick={() => setRenderPreviewUrl(null)}>
                 OK
               </button>
             </div>
