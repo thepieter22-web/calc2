@@ -136,6 +136,13 @@ const r = config.placement === "vloer" || config.placement === "vloerkader" ? 0 
         const finalScale = fitScale * logo.scale;
         const drawW = img.width * finalScale;
         const drawH = img.height * finalScale;
+        logoBoxRef.current = {
+  cx: logo.x,
+  cy: logo.y,
+  w: drawW,
+  h: drawH,
+  rotationDeg: logo.rotationDeg
+};
 
         ctx.save();
         ctx.globalAlpha = clamp(logo.opacity, 0, 1);
