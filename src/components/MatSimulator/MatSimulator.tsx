@@ -33,13 +33,16 @@ const DEFAULT_LOGO: LogoState = {
   opacity: 1
 };
 
+// snap settings
+const SNAP_DISTANCE_PX = 10; // magnet threshold
+
 export default function MatSimulator() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [config, setConfig] = useState<MatConfig>(DEFAULT_CONFIG);
   const [logo, setLogo] = useState<LogoState>(DEFAULT_LOGO);
 
-  // selectie: handles enkel zichtbaar als geselecteerd
+  // selection: handles only when selected
   const [logoSelected, setLogoSelected] = useState(false);
 
   // drag state
@@ -50,11 +53,25 @@ export default function MatSimulator() {
   const [resizeHandle, setResizeHandle] = useState<null | "nw" | "ne" | "sw" | "se">(null);
   const resizeStartRef = useRef<{ startScale: number; startDist: number } | null>(null);
 
-  // logo box (laatst getekende bbox)
+  // logo bbox from last draw (axis-aligned; rotation ignored for hit test)
   const logoBoxRef = useRef<{ cx: number; cy: number; w: number; h: number; rotationDeg: number } | null>(null);
 
-  // cache geladen image (sneller dan telkens loadImage in render)
+  // delete button hitbox on canvas
+  const deleteBtnRef = useRef<{ x: number; y: number; r: number } | null>(null);
+
+  // cache loaded logo image (performance)
   const logoImgRef = useRef<HTMLImageElement | null>(null);
+
+  // keep mat rect for snap calculations (updated every render)
+  const matRectRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+
+  // snap guide state stored in ref (no extra React renders needed)
+  const snapRef = useRef<{ showX: boolean; showY: boolean; x: number; y: number }>({
+    showX: false,
+    showY: false,
+    x: 0,
+    y: 0
+  });
 
   const [status, setStatus] = useState<string>("");
   const [renderPreviewUrl, setRenderPreviewUrl] = useState<string | null>(null);
@@ -63,7 +80,7 @@ export default function MatSimulator() {
     return SIZE_PRESETS.find((p) => p.id === config.presetId);
   }, [config.presetId]);
 
-  // preset -> breedte/hoogte invullen
+  // preset -> set size
   useEffect(() => {
     if (config.presetId !== "custom" && selectedPreset) {
       setConfig((c) => ({
@@ -74,14 +91,14 @@ export default function MatSimulator() {
     }
   }, [config.presetId, selectedPreset]);
 
-  // vloerkader -> rubberrand automatisch uit
+  // vloerkader -> rubber rand off (safety)
   useEffect(() => {
     if (config.placement === "vloerkader" && config.rubberRand) {
       setConfig((c) => ({ ...c, rubberRand: false }));
     }
   }, [config.placement, config.rubberRand]);
 
-  // orientation -> swap indien nodig
+  // orientation swap if needed
   useEffect(() => {
     setConfig((c) => {
       const w = c.widthMm;
@@ -92,7 +109,7 @@ export default function MatSimulator() {
     });
   }, [config.orientation]);
 
-  // laad logo image 1x bij wijziging dataUrl
+  // load logo image once per dataUrl change
   useEffect(() => {
     let cancelled = false;
 
@@ -115,7 +132,31 @@ export default function MatSimulator() {
     };
   }, [logo.dataUrl]);
 
-  // render wanneer config of logo verandert
+  // keyboard delete/backspace when selected
+  useEffect(() => {
+    function onKeyDown(ev: KeyboardEvent) {
+      if (!logoSelected) return;
+      if (!logo.dataUrl) return;
+
+      if (ev.key === "Delete" || ev.key === "Backspace") {
+        ev.preventDefault();
+        deleteLogo();
+      }
+
+      // optional: Esc deselect
+      if (ev.key === "Escape") {
+        setLogoSelected(false);
+        snapRef.current = { showX: false, showY: false, x: 0, y: 0 };
+        void renderPreview();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logoSelected, logo.dataUrl]);
+
+  // render canvas when state changes
   useEffect(() => {
     void renderPreview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -129,7 +170,7 @@ export default function MatSimulator() {
 
     ctx.clearRect(0, 0, PREVIEW.canvasW, PREVIEW.canvasH);
 
-    // achtergrond
+    // background
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, PREVIEW.canvasW, PREVIEW.canvasH);
 
@@ -140,7 +181,9 @@ export default function MatSimulator() {
     const matX = (PREVIEW.canvasW - matWpx) / 2;
     const matY = (PREVIEW.canvasH - matHpx) / 2;
 
-    // radius: enkel afgerond bij muur (zoals je had)
+    // store mat rect for snapping
+    matRectRef.current = { x: matX, y: matY, w: matWpx, h: matHpx };
+
     const r = config.placement === "vloer" || config.placement === "vloerkader" ? 0 : 18;
 
     drawScene(ctx, matX, matY, matWpx, matHpx);
@@ -148,677 +191,29 @@ export default function MatSimulator() {
     const baseColor = adjustColorForUse(config.matColor, config.use);
     drawMat(ctx, matX, matY, matWpx, matHpx, baseColor, r);
 
-    // rubberrand: niet bij vloerkader (kader is dan de omlijsting)
+    // rubber border only when not in floorframe
     if (config.rubberRand && config.placement !== "vloerkader") {
       drawRubberBorder(ctx, matX, matY, matWpx, matHpx, r);
     }
 
-    // logo tekenen
-    const img = logoImgRef.current;
-    if (logo.dataUrl && img) {
-      const target = Math.min(matWpx, matHpx) * 0.55;
-      const fitScale = Math.min(target / img.width, target / img.height);
-      const finalScale = fitScale * logo.scale;
+    // snap guides (draw before logo so logo stays on top)
+    drawSnapGuidYes 👍 Let’s add **(1) snap‑to‑center guides (magnetic center lines)** and **(2) delete via keyboard (Delete/Backspace)**.
 
-      const drawW = img.width * finalScale;
-      const drawH = img.height * finalScale;
+Below is a **copy/paste patch** you can apply to your current `MatSimulator.tsx` (the “clean” version we fixed). I’ll keep it straightforward and safe.
 
-      // bbox bijhouden voor hit-tests & handles
-      logoBoxRef.current = {
-        cx: logo.x,
-        cy: logo.y,
-        w: drawW,
-        h: drawH,
-        rotationDeg: logo.rotationDeg
-      };
+---
 
-      ctx.save();
-      ctx.globalAlpha = clamp(logo.opacity, 0, 1);
-      ctx.translate(logo.x, logo.y);
-      ctx.rotate((logo.rotationDeg * Math.PI) / 180);
-      ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
-      ctx.restore();
+# 1) Snap‑to‑center guides (magnetic center lines)
 
-      // handles enkel als geselecteerd
-      if (logoSelected) {
-        drawLogoGuides(ctx, logo.x, logo.y);
-        drawResizeHandles(ctx);
-      }
-    } else {
-      // geen logo => geen bbox
-      logoBoxRef.current = null;
-    }
+## ✅ A. Add 3 refs + 1 small state (near your other refs/states)
+Find your refs section (where you have `logoBoxRef`, `deleteBtnRef`, etc.) and add this:
 
-    // overlay rand: NIET bij vloerkader (dan wil je geen zwarte boord)
-    if (config.placement !== "vloerkader") {
-      drawOverlay(ctx, matX, matY, matWpx, matHpx, r);
-    }
-  }
+```ts
+// ✅ mat rect (for snapping)
+const matRectRef = useRef<{ x: number; y: number; w: number; h: number; cx: number; cy: number } | null>(null);
 
-  function drawScene(ctx: CanvasRenderingContext2D, matX: number, matY: number, matW: number, matH: number) {
-    ctx.fillStyle = "#f5f5f5";
-    ctx.fillRect(0, 0, PREVIEW.canvasW, PREVIEW.canvasH);
+// ✅ snap guides flags (draw center lines when near)
+const snapGuidesRef = useRef<{ showV: boolean; showH: boolean }>({ showV: false, showH: false });
 
-    // schaduw
-    ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,0.12)";
-    ctx.filter = "blur(10px)";
-    ctx.fillRect(matX + 8, matY + 10, matW, matH);
-    ctx.restore();
-
-    // vloerkader als grijze omlijsting
-    if (config.placement === "vloerkader") {
-      const framePad = 16;
-      ctx.fillStyle = "#d4d4d4";
-      ctx.fillRect(matX - framePad, matY - framePad, matW + framePad * 2, matH + framePad * 2);
-      ctx.strokeStyle = "#a3a3a3";
-      ctx.lineWidth = 3;
-      ctx.strokeRect(matX - framePad, matY - framePad, matW + framePad * 2, matH + framePad * 2);
-    }
-  }
-
-  function drawMat(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color: string, r: number) {
-    const grad = ctx.createLinearGradient(x, y, x + w, y + h);
-    grad.addColorStop(0, color);
-    grad.addColorStop(1, shade(color, -10));
-
-    ctx.fillStyle = grad;
-    roundRect(ctx, x, y, w, h, r);
-    ctx.fill();
-  }
-
-  function drawRubberBorder(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-    ctx.save();
-    ctx.strokeStyle = "rgba(0,0,0,0.55)";
-    ctx.lineWidth = 10;
-    roundRect(ctx, x + 4, y + 4, w - 8, h - 8, r);
-    ctx.stroke();
-
-    ctx.strokeStyle = "rgba(255,255,255,0.18)";
-    ctx.lineWidth = 3;
-    roundRect(ctx, x + 10, y + 10, w - 20, h - 20, r);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawOverlay(ctx: CanvasRenderingContext2D, matX: number, matY: number, matW: number, matH: number, r: number) {
-    ctx.save();
-    ctx.strokeStyle = "rgba(0,0,0,0.2)";
-    ctx.lineWidth = 1;
-    roundRect(ctx, matX, matY, matW, matH, r);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawLogoGuides(ctx: CanvasRenderingContext2D, cx: number, cy: number) {
-    ctx.save();
-    ctx.globalAlpha = 0.25;
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(cx - 10, cy);
-    ctx.lineTo(cx + 10, cy);
-    ctx.moveTo(cx, cy - 10);
-    ctx.lineTo(cx, cy + 10);
-    ctx.stroke();
-
-    ctx.globalAlpha = 0.12;
-    ctx.strokeStyle = "#000000";
-    ctx.beginPath();
-    ctx.arc(cx, cy, 18, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawResizeHandles(ctx: CanvasRenderingContext2D) {
-    const b = logoBoxRef.current;
-    if (!b) return;
-
-    const halfW = b.w / 2;
-    const halfH = b.h / 2;
-
-    const corners = [
-      { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
-      { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
-      { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
-      { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
-    ];
-
-    ctx.save();
-    for (const c of corners) {
-      ctx.fillStyle = "#2563eb";
-      ctx.beginPath();
-      ctx.arc(c.x, c.y, 8, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.strokeStyle = "white";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  function getHandleAtPoint(x: number, y: number): null | "nw" | "ne" | "sw" | "se" {
-    const b = logoBoxRef.current;
-    if (!b) return null;
-
-    const halfW = b.w / 2;
-    const halfH = b.h / 2;
-
-    const corners = [
-      { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
-      { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
-      { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
-      { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
-    ];
-
-    const R = 12;
-    for (const c of corners) {
-      const dx = x - c.x;
-      const dy = y - c.y;
-      if (dx * dx + dy * dy <= R * R) return c.id;
-    }
-    return null;
-  }
-
-  function isPointInLogoBox(x: number, y: number) {
-    const b = logoBoxRef.current;
-    if (!b) return false;
-
-    const halfW = b.w / 2;
-    const halfH = b.h / 2;
-
-    return x >= b.cx - halfW && x <= b.cx + halfW && y >= b.cy - halfH && y <= b.cy + halfH;
-  }
-
-  function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-    const radius = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    ctx.moveTo(x + radius, y);
-    ctx.arcTo(x + w, y, x + w, y + h, radius);
-    ctx.arcTo(x + w, y + h, x, y + h, radius);
-    ctx.arcTo(x, y + h, x, y, radius);
-    ctx.arcTo(x, y, x + w, y, radius);
-    ctx.closePath();
-  }
-
-  function shade(hex: string, amount: number) {
-    const c = hex.replace("#", "");
-    const rr = clamp(parseInt(c.slice(0, 2), 16) + amount, 0, 255);
-    const gg = clamp(parseInt(c.slice(2, 4), 16) + amount, 0, 255);
-    const bb = clamp(parseInt(c.slice(4, 6), 16) + amount, 0, 255);
-    return `#${rr.toString(16).padStart(2, "0")}${gg.toString(16).padStart(2, "0")}${bb
-      .toString(16)
-      .padStart(2, "0")}`;
-  }
-
-  async function onLogoFile(file: File | null) {
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result);
-
-      setLogo((l) => ({
-        ...l,
-        dataUrl,
-        x: PREVIEW.canvasW / 2,
-        y: PREVIEW.canvasH / 2,
-        scale: 1,
-        rotationDeg: 0,
-        opacity: 1
-      }));
-
-      setLogoSelected(true);
-    };
-
-    reader.readAsDataURL(file);
-  }
-
-  function canvasPoint(e: React.PointerEvent<HTMLCanvasElement>) {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * PREVIEW.canvasW;
-    const y = ((e.clientY - rect.top) / rect.height) * PREVIEW.canvasH;
-    return { x, y };
-  }
-
-  function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!logo.dataUrl) {
-      setLogoSelected(false);
-      return;
-    }
-
-    const { x, y } = canvasPoint(e);
-
-    // 1) als geselecteerd: eerst handle check
-    if (logoSelected) {
-      const handle = getHandleAtPoint(x, y);
-      if (handle) {
-        setResizeHandle(handle);
-
-        const b = logoBoxRef.current;
-        if (b) {
-          const dist = Math.hypot(x - b.cx, y - b.cy);
-          resizeStartRef.current = {
-            startScale: logo.scale,
-            startDist: Math.max(dist, 1)
-          };
-        }
-
-        e.currentTarget.setPointerCapture(e.pointerId);
-        return;
-      }
-    }
-
-    // 2) klik in logo => selecteer + drag
-    if (isPointInLogoBox(x, y)) {
-      setLogoSelected(true);
-
-      setDragging(true);
-      dragOffset.current = { dx: logo.x - x, dy: logo.y - y };
-
-      e.currentTarget.setPointerCapture(e.pointerId);
-      return;
-    }
-
-    // 3) klik buiten logo => deselect
-    setLogoSelected(false);
-    setDragging(false);
-    setResizeHandle(null);
-    resizeStartRef.current = null;
-  }
-
-  function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
-    const { x, y } = canvasPoint(e);
-
-    // RESIZE
-    if (resizeHandle) {
-      const b = logoBoxRef.current;
-      const s = resizeStartRef.current;
-      if (!b || !s) return;
-
-      const dist = Math.hypot(x - b.cx, y - b.cy);
-      const factor = dist / s.startDist;
-
-      const nextScale = clamp(s.startScale * factor, 0.2, 3);
-      setLogo((l) => ({ ...l, scale: nextScale }));
-      return;
-    }
-
-    // DRAG
-    if (!dragging) return;
-
-    setLogo((l) => ({
-      ...l,
-      x: x + dragOffset.current.dx,
-      y: y + dragOffset.current.dy
-    }));
-  }
-
-  function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
-    setDragging(false);
-    setResizeHandle(null);
-    resizeStartRef.current = null;
-
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-  }
-
-  function exportPng() {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const url = canvas.toDataURL("image/png");
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `carpetz-preview-${config.widthMm}x${config.heightMm}mm.png`;
-    a.click();
-  }
-
-  function showRenderPreview() {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const url = canvas.toDataURL("image/png");
-    setRenderPreviewUrl(url);
-
-    setStatus("Render preview gegenereerd.");
-    setTimeout(() => setStatus(""), 2500);
-  }
-
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-      <section className="lg:col-span-5 bg-white rounded-2xl border border-neutral-200 p-5">
-        <h2 className="text-xl font-semibold">Instellingen</h2>
-        <p className="text-sm text-neutral-600 mt-1">Alles in millimeters (mm).</p>
-
-        <div className="mt-5 space-y-4">
-          <div>
-            <label className="text-sm font-medium">Type mat</label>
-            <div className="mt-2 flex gap-2">
-              <ToggleButton active={config.use === "binnen"} onClick={() => setConfig((c) => ({ ...c, use: "binnen" }))}>
-                Binnen
-              </ToggleButton>
-              <ToggleButton active={config.use === "buiten"} onClick={() => setConfig((c) => ({ ...c, use: "buiten" }))}>
-                Buiten
-              </ToggleButton>
-            </div>
-          </div>
-
-          <div>
-            <label className="text-sm font-medium">Plaatsing</label>
-            <div className="mt-2 flex gap-2">
-              <ToggleButton active={config.placement === "vloer"} onClick={() => setConfig((c) => ({ ...c, placement: "vloer" }))}>
-                Op de vloer
-              </ToggleButton>
-              <ToggleButton
-                active={config.placement === "vloerkader"}
-                onClick={() => setConfig((c) => ({ ...c, placement: "vloerkader", rubberRand: false }))}
-              >
-                In vloerkader
-              </ToggleButton>
-            </div>
-          </div>
-
-          <div>
-            <label className="text-sm font-medium">Oriëntatie</label>
-            <div className="mt-2 flex gap-2">
-              <ToggleButton
-                active={config.orientation === "liggend"}
-                onClick={() => setConfig((c) => ({ ...c, orientation: "liggend" }))}
-              >
-                Liggend
-              </ToggleButton>
-              <ToggleButton
-                active={config.orientation === "staand"}
-                onClick={() => setConfig((c) => ({ ...c, orientation: "staand" }))}
-              >
-                Staand
-              </ToggleButton>
-            </div>
-          </div>
-
-          {config.placement !== "vloerkader" ? (
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <label className="text-sm font-medium">Rubberen rand</label>
-                <p className="text-xs text-neutral-500">Dikke beschermrand rond de mat</p>
-              </div>
-              <input
-                type="checkbox"
-                className="h-5 w-5"
-                checked={config.rubberRand}
-                onChange={(e) => setConfig((c) => ({ ...c, rubberRand: e.target.checked }))}
-              />
-            </div>
-          ) : null}
-
-          <div>
-            <label className="text-sm font-medium">Maat</label>
-            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
-              <select
-                className="w-full border border-neutral-300 rounded-xl px-3 py-2"
-                value={config.presetId}
-                onChange={(e) => setConfig((c) => ({ ...c, presetId: e.target.value as any }))}
-              >
-                {SIZE_PRESETS.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-                <option value="custom">Maat op keuze</option>
-              </select>
-
-              <div className="flex gap-2">
-                <div className="flex-1">
-                  <input
-                    type="number"
-                    min={200}
-                    max={4000}
-                    step={10}
-                    className="w-full border border-neutral-300 rounded-xl px-3 py-2"
-                    value={config.widthMm}
-                    onChange={(e) => setConfig((c) => ({ ...c, presetId: "custom", widthMm: Number(e.target.value) }))}
-                    placeholder="Breedte (mm)"
-                  />
-                  <p className="text-xs text-neutral-500 mt-1">Breedte (mm)</p>
-                </div>
-                <div className="flex-1">
-                  <input
-                    type="number"
-                    min={200}
-                    max={4000}
-                    step={10}
-                    className="w-full border border-neutral-300 rounded-xl px-3 py-2"
-                    value={config.heightMm}
-                    onChange={(e) => setConfig((c) => ({ ...c, presetId: "custom", heightMm: Number(e.target.value) }))}
-                    placeholder="Hoogte (mm)"
-                  />
-                  <p className="text-xs text-neutral-500 mt-1">Hoogte (mm)</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <label className="text-sm font-medium">Kleur mat</label>
-              <p className="text-xs text-neutral-500">Kies de basiskleur</p>
-            </div>
-            <input
-              type="color"
-              value={config.matColor}
-              onChange={(e) => setConfig((c) => ({ ...c, matColor: e.target.value }))}
-              className="h-10 w-12 p-1 rounded-xl border border-neutral-300 bg-white"
-            />
-          </div>
-
-          <div>
-            <label className="text-sm font-medium">Logo upload</label>
-            <div className="mt-2 flex items-center gap-3">
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => void onLogoFile(e.target.files?.[0] ?? null)}
-                className="block w-full text-sm"
-              />
-              <button
-                type="button"
-                className="px-3 py-2 rounded-xl border border-neutral-300 hover:bg-neutral-50"
-                onClick={() => {
-                  setLogo(DEFAULT_LOGO);
-                  setLogoSelected(false);
-                }}
-              >
-                Reset
-              </button>
-            </div>
-
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-              <Range
-                label="Logo grootte"
-                value={logo.scale}
-                min={0.2}
-                max={3}
-                step={0.05}
-                onChange={(v) => setLogo((l) => ({ ...l, scale: v }))}
-                suffix="×"
-              />
-              <Range
-                label="Logo rotatie"
-                value={logo.rotationDeg}
-                min={-180}
-                max={180}
-                step={1}
-                onChange={(v) => setLogo((l) => ({ ...l, rotationDeg: v }))}
-                suffix="°"
-              />
-              <Range
-                label="Logo opacity"
-                value={logo.opacity}
-                min={0.2}
-                max={1}
-                step={0.05}
-                onChange={(v) => setLogo((l) => ({ ...l, opacity: v }))}
-              />
-              <div className="flex items-end gap-2">
-                <button
-                  type="button"
-                  className="w-full px-3 py-2 rounded-xl bg-neutral-900 text-white hover:bg-neutral-800"
-                  onClick={exportPng}
-                >
-                  Export PNG
-                </button>
-
-                <button
-                  type="button"
-                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 hover:bg-neutral-50"
-                  onClick={showRenderPreview}
-                >
-                  Render preview
-                </button>
-              </div>
-            </div>
-
-            {status ? (
-              <p className="mt-3 text-sm text-neutral-700 bg-neutral-100 border border-neutral-200 rounded-xl p-3">{status}</p>
-            ) : null}
-          </div>
-
-          <details>
-            <summary className="cursor-pointer text-sm text-neutral-700">Toon configuratie (JSON)</summary>
-            <pre className="mt-2 text-xs bg-neutral-50 border border-neutral-200 rounded-xl p-3 overflow-auto">
-              {JSON.stringify({ config, logo: { ...logo, dataUrl: logo.dataUrl ? "[dataUrl]" : undefined } }, null, 2)}
-            </pre>
-          </details>
-        </div>
-      </section>
-
-      <section className="lg:col-span-7 bg-white rounded-2xl border border-neutral-200 p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold">Preview</h2>
-            <p className="text-sm text-neutral-600 mt-1">Klik op het logo om te selecteren. Klik op de achtergrond om te deselecteren.</p>
-          </div>
-          <span className="text-xs text-neutral-500">
-            Canvas: {PREVIEW.canvasW}×{PREVIEW.canvasH}px
-          </span>
-        </div>
-
-        <div className="mt-4 rounded-2xl border border-neutral-200 overflow-hidden bg-neutral-50">
-          <canvas
-            ref={canvasRef}
-            width={PREVIEW.canvasW}
-            height={PREVIEW.canvasH}
-            className="w-full h-auto touch-none"
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerCancel={onPointerUp}
-          />
-        </div>
-
-        <p className="mt-3 text-xs text-neutral-500">Tip: upload liefst een PNG met transparante achtergrond.</p>
-      </section>
-
-      {renderPreviewUrl ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6" onClick={() => setRenderPreviewUrl(null)}>
-          <div className="w-full max-w-4xl rounded-2xl bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-3 flex items-center justify-between">
-              <div className="font-semibold">Render preview</div>
-              <button className="rounded-xl border border-neutral-300 px-3 py-2 hover:bg-neutral-50" onClick={() => setRenderPreviewUrl(null)}>
-                Sluiten
-              </button>
-            </div>
-
-            <img
-              src={renderPreviewUrl}
-              alt="Gerenderde logomat preview"
-              className="w-full h-auto rounded-xl border border-neutral-200"
-            />
-
-            <div className="mt-3 flex gap-2">
-              <a
-                href={renderPreviewUrl}
-                download={`carpetz-render-preview-${config.widthMm}x${config.heightMm}mm.png`}
-                className="rounded-xl bg-neutral-900 text-white px-4 py-2 hover:bg-neutral-800"
-              >
-                Download PNG
-              </a>
-              <button className="rounded-xl border border-neutral-300 px-4 py-2 hover:bg-neutral-50" onClick={() => setRenderPreviewUrl(null)}>
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function ToggleButton({
-  active,
-  onClick,
-  children
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "px-3 py-2 rounded-xl border text-sm transition",
-        active
-          ? "bg-neutral-900 text-white border-neutral-900"
-          : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50"
-      ].join(" ")}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Range({
-  label,
-  value,
-  min,
-  max,
-  step,
-  onChange,
-  suffix
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  onChange: (v: number) => void;
-  suffix?: string;
-}) {
-  const decimals = label.includes("rotatie") ? 0 : 2;
-  return (
-    <div className="border border-neutral-200 rounded-xl p-3">
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">{label}</span>
-        <span className="text-xs text-neutral-600">
-          {value.toFixed(decimals)}
-          {suffix ?? ""}
-        </span>
-      </div>
-      <input
-        type="range"
-        className="w-full mt-2"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-      />
-    </div>
-  );
-}
+// ✅ force redraw when guides change without logo change (e.g. pointer up)
+const [guideTick, setGuideTick] = useState(0);
