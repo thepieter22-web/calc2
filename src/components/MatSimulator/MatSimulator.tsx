@@ -263,6 +263,34 @@ const r = config.placement === "vloer" || config.placement === "vloerkader" ? 0 
       .padStart(2, "0")}`;
   }
 
+  function drawResizeHandles(ctx: CanvasRenderingContext2D) {
+  const b = logoBoxRef.current;
+  if (!b) return;
+
+  const halfW = b.w / 2;
+  const halfH = b.h / 2;
+
+  const corners = [
+    { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
+    { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
+    { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
+    { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
+  ];
+
+  ctx.save();
+  for (const c of corners) {
+    ctx.fillStyle = "#2563eb";
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 8, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+``
   async function onLogoFile(file: File | null) {
     if (!file) return;
     const reader = new FileReader();
