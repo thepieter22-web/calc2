@@ -33,7 +33,7 @@ const DEFAULT_LOGO: LogoState = {
   opacity: 1
 };
 
-const SNAP_PX = 10; // magnet threshold (pixels)
+const SNAP_PX = 10;
 
 export default function MatSimulator() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -52,7 +52,7 @@ export default function MatSimulator() {
   const [resizeHandle, setResizeHandle] = useState<null | "nw" | "ne" | "sw" | "se">(null);
   const resizeStartRef = useRef<{ startScale: number; startDist: number } | null>(null);
 
-  // bbox from last draw (axis-aligned; rotation ignored for hit test)
+  // bbox from last draw (axis-aligned; rotation ignored for hit tests)
   const logoBoxRef = useRef<{ cx: number; cy: number; w: number; h: number; rotationDeg: number } | null>(null);
 
   // delete button hitbox on canvas
@@ -67,7 +67,7 @@ export default function MatSimulator() {
   // snap guide flags
   const snapGuidesRef = useRef<{ showV: boolean; showH: boolean }>({ showV: false, showH: false });
 
-  // force redraw when guides clear (without logo changing)
+  // force redraw when guides clear
   const [guideTick, setGuideTick] = useState(0);
 
   // status + modal preview
@@ -203,10 +203,8 @@ export default function MatSimulator() {
       drawRubberBorder(ctx, matX, matY, matWpx, matHpx, r);
     }
 
-    // snap guides (only drawn when flags true)
-    if (logoSelected) {
-      drawSnapGuides(ctx);
-    }
+    // snap guides
+    if (logoSelected) drawSnapGuides(ctx);
 
     // logo
     const img = logoImgRef.current;
@@ -791,72 +789,31 @@ export default function MatSimulator() {
                 onChange={(e) => void onLogoFile(e.target.files?.[0] ?? null)}
                 className="block w-full text-sm"
               />
-              <button
-                type="button"
-                className="px-3 py-2 rounded-xl border border-neutral-300 hover:bg-neutral-50"
-                onClick={deleteLogo}
-              >
-                Verwijder logo
-              </button>
+              {/* GEEN extra "verwijder logo" knop hier */}
             </div>
 
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-              <Range
-                label="Logo grootte"
-                value={logo.scale}
-                min={0.2}
-                max={3}
-                step={0.05}
-                onChange={(v) => setLogo((l) => ({ ...l, scale: v }))}
-                suffix="×"
-              />
-              <Range
-                label="Logo rotatie"
-                value={logo.rotationDeg}
-                min={-180}
-                max={180}
-                step={1}
-                onChange={(v) => setLogo((l) => ({ ...l, rotationDeg: v }))}
-                suffix="°"
-              />
-              <Range
-                label="Logo opacity"
-                value={logo.opacity}
-                min={0.2}
-                max={1}
-                step={0.05}
-                onChange={(v) => setLogo((l) => ({ ...l, opacity: v }))}
-              />
-              <div className="flex items-end gap-2">
-                <button
-                  type="button"
-                  className="w-full px-3 py-2 rounded-xl bg-neutral-900 text-white hover:bg-neutral-800"
-                  onClick={exportPng}
-                >
-                  Export PNG
-                </button>
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                className="w-full px-3 py-2 rounded-xl bg-neutral-900 text-white hover:bg-neutral-800"
+                onClick={exportPng}
+              >
+                Export PNG
+              </button>
 
-                <button
-                  type="button"
-                  className="w-full px-3 py-2 rounded-xl border border-neutral-300 hover:bg-neutral-50"
-                  onClick={showRenderPreview}
-                >
-                  Render preview
-                </button>
-              </div>
+              <button
+                type="button"
+                className="w-full px-3 py-2 rounded-xl border border-neutral-300 hover:bg-neutral-50"
+                onClick={showRenderPreview}
+              >
+                Render preview
+              </button>
             </div>
 
             {status ? (
               <p className="mt-3 text-sm text-neutral-700 bg-neutral-100 border border-neutral-200 rounded-xl p-3">{status}</p>
             ) : null}
           </div>
-
-          <details>
-            <summary className="cursor-pointer text-sm text-neutral-700">Toon configuratie (JSON)</summary>
-            <pre className="mt-2 text-xs bg-neutral-50 border border-neutral-200 rounded-xl p-3 overflow-auto">
-              {JSON.stringify({ config, logo: { ...logo, dataUrl: logo.dataUrl ? "[dataUrl]" : undefined } }, null, 2)}
-            </pre>
-          </details>
         </div>
       </section>
 
@@ -889,6 +846,7 @@ export default function MatSimulator() {
         <p className="mt-3 text-xs text-neutral-500">Tip: upload liefst een PNG met transparante achtergrond.</p>
       </section>
 
+      {/* Render preview modal */}
       {renderPreviewUrl ? (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
@@ -948,52 +906,10 @@ function ToggleButton({
       onClick={onClick}
       className={[
         "px-3 py-2 rounded-xl border text-sm transition",
-        active
-          ? "bg-neutral-900 text-white border-neutral-900"
-          : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50"
+        active ? "bg-neutral-900 text-white border-neutral-900" : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50"
       ].join(" ")}
     >
       {children}
     </button>
-  );
-}
-
-function Range({
-  label,
-  value,
-  min,
-  max,
-  step,
-  onChange,
-  suffix
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  onChange: (v: number) => void;
-  suffix?: string;
-}) {
-  const decimals = label.includes("rotatie") ? 0 : 2;
-  return (
-    <div className="border border-neutral-200 rounded-xl p-3">
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">{label}</span>
-        <span className="text-xs text-neutral-600">
-          {value.toFixed(decimals)}
-          {suffix ?? ""}
-        </span>
-      </div>
-      <input
-        type="range"
-        className="w-full mt-2"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-      />
-    </div>
   );
 }
