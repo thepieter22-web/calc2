@@ -126,7 +126,7 @@ export default function MatSimulator() {
       }
     }
 
-    drawOverlay(ctx, matX, matY, matWpx, matHpx, mmToPx);
+    drawOverlay(ctx, matX, matY, matWpx, matHpx);
   }
 
   function drawScene(ctx: CanvasRenderingContext2D, matX: number, matY: number, matW: number, matH: number) {
@@ -187,48 +187,19 @@ export default function MatSimulator() {
   }
 
   function drawOverlay(
-    ctx: CanvasRenderingContext2D,
-    matX: number,
-    matY: number,
-    matW: number,
-    matH: number,
-    mmToPx: number
-  ) {
-    ctx.save();
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.strokeStyle = "rgba(0,0,0,0.15)";
-    ctx.lineWidth = 1;
-
-    const boxW = 300;
-    const boxH = 92;
-    const boxX = 16;
-    const boxY = 16;
-
-    roundRect(ctx, boxX, boxY, boxW, boxH, 12);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = "#111827";
-    ctx.font = "600 14px system-ui, -apple-system, Segoe UI, Roboto";
-    ctx.fillText("Preview info", boxX + 14, boxY + 26);
-
-    ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto";
-    ctx.fillStyle = "#374151";
-    ctx.fillText(`Type: ${config.use} • Plaatsing: ${config.placement}`, boxX + 14, boxY + 46);
-    ctx.fillText(
-      `Maat: ${config.widthMm} × ${config.heightMm} mm • Schaal: ${mmToPx.toFixed(2)} px/mm`,
-      boxX + 14,
-      boxY + 64
-    );
-    ctx.fillText(`Rubberen rand: ${config.rubberRand ? "ja" : "nee"}`, boxX + 14, boxY + 82);
-
-    ctx.strokeStyle = "rgba(0,0,0,0.2)";
-    ctx.lineWidth = 1;
-    roundRect(ctx, matX, matY, matW, matH, 18);
-    ctx.stroke();
-
-    ctx.restore();
-  }
+  ctx: CanvasRenderingContext2D,
+  matX: number,
+  matY: number,
+  matW: number,
+  matH: number
+) {
+  ctx.save();
+  ctx.strokeStyle = "rgba(0,0,0,0.2)";
+  ctx.lineWidth = 1;
+  roundRect(ctx, matX, matY, matW, matH, 18);
+  ctx.stroke();
+  ctx.restore();
+}
 
   function drawLogoGuides(ctx: CanvasRenderingContext2D, cx: number, cy: number) {
     ctx.save();
