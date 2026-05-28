@@ -333,16 +333,36 @@ function getHandleAtPoint(x: number, y: number): null | "nw" | "ne" | "sw" | "se
     reader.readAsDataURL(file);
   }
 
-  function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!logo.dataUrl) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * PREVIEW.canvasW;
-    const y = ((e.clientY - rect.top) / rect.height) * PREVIEW.canvasH;
+function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
+  if (!logo.dataUrl) return;
 
-    setDragging(true);
-    dragOffset.current = { dx: logo.x - x, dy: logo.y - y };
+  const rect = e.currentTarget.getBoundingClientRect();
+  const x = ((e.clientX - rect.left) / rect.width) * PREVIEW.canvasW;
+  const y = ((e.clientY - rect.top) / rect.height) * PREVIEW.canvasH;
+
+  // ✅ eerst checken of je op een hoek-handle zit
+  const handle = getHandleAtPoint(x, y);
+  if (handle) {
+    setResizeHandle(handle);
+
+    const b = logoBoxRef.current;
+    if (b) {
+      const dist = Math.hypot(x - b.cx, y - b.cy);
+      resizeStartRef.current = {
+        startScale: logo.scale,
+        startDist: Math.max(dist, 1)
+      };
+    }
+
     (e.currentTarget as any).setPointerCapture?.(e.pointerId);
+    return;
   }
+
+  // ✅ anders: normaal draggen
+  setDragging(true);
+  dragOffset.current = { dx: logo.x - x, dy: logo.y - y };
+  (e.currentTarget as any).setPointerCapture?.(e.pointerId);
+}
 
   function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
     if (!dragging) return;
