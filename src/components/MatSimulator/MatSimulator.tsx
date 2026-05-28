@@ -41,6 +41,23 @@ export default function MatSimulator() {
   const [dragging, setDragging] = useState(false);
   const dragOffset = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
 
+// ✅ NIEUW: onthoud de laatst getekende logo-box (voor handles)
+const logoBoxRef = useRef<{
+  cx: number;
+  cy: number;
+  w: number;
+  h: number;
+  rotationDeg: number;
+} | null>(null);
+
+// ✅ NIEUW: resize-state
+const [resizeHandle, setResizeHandle] = useState<null | "nw" | "ne" | "sw" | "se">(null);
+const resizeStartRef = useRef<{
+  startScale: number;
+  startDist: number;
+} | null>(null);
+
+  
   // Status tekst onder de knoppen (optioneel)
   const [status, setStatus] = useState<string>("");
 
