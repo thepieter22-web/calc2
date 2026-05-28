@@ -94,14 +94,15 @@ export default function MatSimulator() {
 
     const matX = (PREVIEW.canvasW - matWpx) / 2;
     const matY = (PREVIEW.canvasH - matHpx) / 2;
+const r = config.placement === "vloer" || config.placement === "vloerkader" ? 0 : 18;
 
     drawScene(ctx, matX, matY, matWpx, matHpx);
 
     const baseColor = adjustColorForUse(config.matColor, config.use);
-    drawMat(ctx, matX, matY, matWpx, matHpx, baseColor);
+    drawMat(ctx, matX, matY, matWpx, matHpx, baseColor, r);
 
     if (config.rubberRand) {
-      drawRubberBorder(ctx, matX, matY, matWpx, matHpx);
+      drawRubberBorder(ctx, matX, matY, matWpx, matHpx, r);
     }
 
     if (logo.dataUrl) {
@@ -126,7 +127,7 @@ export default function MatSimulator() {
       }
     }
 
-    drawOverlay(ctx, matX, matY, matWpx, matHpx);
+    drawOverlay(ctx, matX, matY, matWpx, matHpx, r);
   }
 
   function drawScene(ctx: CanvasRenderingContext2D, matX: number, matY: number, matW: number, matH: number) {
@@ -149,7 +150,7 @@ export default function MatSimulator() {
     }
   }
 
-  function drawMat(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color: string) {
+  function drawMat(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color: string, r: number) {
     const grad = ctx.createLinearGradient(x, y, x + w, y + h);
     grad.addColorStop(0, color);
     grad.addColorStop(1, shade(color, -10));
@@ -172,7 +173,7 @@ export default function MatSimulator() {
     ctx.restore();
   }
 
-  function drawRubberBorder(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
+  function drawRubberBorder(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) { {
     ctx.save();
     ctx.strokeStyle = "rgba(0,0,0,0.55)";
     ctx.lineWidth = 10;
@@ -191,7 +192,8 @@ export default function MatSimulator() {
   matX: number,
   matY: number,
   matW: number,
-  matH: number
+  matH: number,
+  r : number
 ) {
   ctx.save();
   ctx.strokeStyle = "rgba(0,0,0,0.2)";
