@@ -342,6 +342,81 @@ function getHandleAtPoint(x: number, y: number): null | "nw" | "ne" | "sw" | "se
   return null;
 }
 
+function drawResizeHandles(ctx: CanvasRenderingContext2D) {
+  const b = logoBoxRef.current;
+  if (!b) return;
+
+  const halfW = b.w / 2;
+  const halfH = b.h / 2;
+
+  const corners = [
+    { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
+    { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
+    { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
+    { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
+  ];
+
+  ctx.save();
+  for (const c of corners) {
+    ctx.fillStyle = "#2563eb";
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 8, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function getHandleAtPoint(x: number, y: number): null | "nw" | "ne" | "sw" | "se" {
+  const b = logoBoxRef.current;
+  if (!b) return null;
+
+  const halfW = b.w / 2;
+  const halfH = b.h / 2;
+
+  const corners = [
+    { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
+    { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
+    { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
+    { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
+  ];
+
+  const R = 12;
+  for (const c of corners) {
+    const dx = x - c.x;
+    const dy = y - c.y;
+    if (dx * dx + dy * dy <= R * R) return c.id;
+  }
+  return null;
+}
+
+function isPointInLogoBox(x: number, y: number) {
+  const b = logoBoxRef.current;
+  if (!b) return false;
+
+  const halfW = b.w / 2;
+  const halfH = b.h / 2;
+
+  return x >= b.cx - halfW && x <= b.cx + halfW && y >= b.cy - halfH && y <= b.cy + halfH;
+}
+
+function isPointInLogoBox(x: number, y: number) {
+  const b = logoBoxRef.current;
+  if (!b) return false;
+
+  const halfW = b.w / 2;
+  const halfH = b.h / 2;
+
+  return (
+    x >= b.cx - halfW &&
+    x <= b.cx + halfW &&
+    y >= b.cy - halfH &&
+    y <= b.cy + halfH
+  );
+}
   
   async function onLogoFile(file: File | null) {
     if (!file) return;
@@ -409,23 +484,7 @@ function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
   resizeStartRef.current = null;
 }
 
-  // ✅ eerst checken of je op een hoek-handle zit
-  const handle = getHandleAtPoint(x, y);
-  if (handle) {
-    setResizeHandle(handle);
 
-    const b = logoBoxRef.current;
-    if (b) {
-      const dist = Math.hypot(x - b.cx, y - b.cy);
-      resizeStartRef.current = {
-        startScale: logo.scale,
-        startDist: Math.max(dist, 1)
-      };
-    }
-
-    (e.currentTarget as any).setPointerCapture?.(e.pointerId);
-    return;
-  }
 
   // ✅ anders: normaal draggen
   setDragging(true);
