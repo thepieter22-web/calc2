@@ -61,6 +61,12 @@ export default function MatSimulator() {
     }
   }, [config.presetId, selectedPreset]);
 
+useEffect(() => {
+  if (config.placement === "vloerkader" && config.rubberRand) {
+    setConfig((c) => ({ ...c, rubberRand: false }));
+  }
+}, [config.placement, config.rubberRand]);
+  
   useEffect(() => {
     setConfig((c) => {
       const w = c.widthMm;
@@ -355,18 +361,21 @@ const r = config.placement === "vloer" || config.placement === "vloerkader" ? 0 
             </div>
           </div>
 
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <label className="text-sm font-medium">Rubberen rand</label>
-              <p className="text-xs text-neutral-500">Dikke beschermrand rond de mat</p>
-            </div>
-            <input
-              type="checkbox"
-              className="h-5 w-5"
-              checked={config.rubberRand}
-              onChange={(e) => setConfig((c) => ({ ...c, rubberRand: e.target.checked }))}
-            />
-          </div>
+          {config.placement !== "vloerkader" ? (
+  <div className="flex items-center justify-between gap-3">
+    <div>
+      <label className="text-sm font-medium">Rubberen rand</label>
+      <p className="text-xs text-neutral-500">Dikke beschermrand rond de mat</p>
+    </div>
+    <input
+      type="checkbox"
+      className="h-5 w-5"
+      checked={config.rubberRand}
+      onChange={(e) => setConfig((c) => ({ ...c, rubberRand: e.target.checked }))}
+    />
+  </div>
+) : null}
+
 
           <div>
             <label className="text-sm font-medium">Maat</label>
