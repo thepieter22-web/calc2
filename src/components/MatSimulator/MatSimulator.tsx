@@ -291,6 +291,30 @@ const r = config.placement === "vloer" || config.placement === "vloerkader" ? 0 
   ctx.restore();
 }
 ``
+function getHandleAtPoint(x: number, y: number): null | "nw" | "ne" | "sw" | "se" {
+  const b = logoBoxRef.current;
+  if (!b) return null;
+
+  const halfW = b.w / 2;
+  const halfH = b.h / 2;
+
+  const corners = [
+    { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
+    { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
+    { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
+    { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
+  ];
+
+  const R = 12;
+  for (const c of corners) {
+    const dx = x - c.x;
+    const dy = y - c.y;
+    if (dx * dx + dy * dy <= R * R) return c.id;
+  }
+  return null;
+}
+``
+  
   async function onLogoFile(file: File | null) {
     if (!file) return;
     const reader = new FileReader();
