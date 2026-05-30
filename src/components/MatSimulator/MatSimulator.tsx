@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { LogoState, MatConfig, PreviewSettings } from "./types";
 import { SIZE_PRESETS } from "./presets";
-import { adjustColorForUse, clamp, computeMmToPxScale, loadImage } from "./utils";
+import { adjustColorForUse, clamp, loadImage } from "./utils";
 
 const PREVIEW: PreviewSettings = {
   canvasW: 900,
@@ -47,6 +47,32 @@ function getPresetLabelCm(widthMm: number, heightMm: number) {
   const smallest = Math.min(widthMm, heightMm);
   const largest = Math.max(widthMm, heightMm);
   return `${mmToCm(smallest)} × ${mmToCm(largest)} cm`;
+}
+
+/**
+ * Vaste schaal voor de preview:
+ * - standaardmaten worden relatief correct weergegeven
+ * - grotere matten blijven visueel groter dan kleinere
+ * - custom maten groter dan de grootste preset krijgen ook correct een kleinere schaal
+ */
+function computeStableMmToPxScale(
+  widthMm: number,
+  heightMm: number,
+  preview: PreviewSettings
+) {
+  const presetLongestSide = Math.max(...SIZE_PRESETS.map((p) => Math.max(p.widthMm, p.heightMm)));
+  const presetShortestSide = Math.max(...SIZE_PRESETS.map((p) => Math.min(p.widthMm, p.heightMm)));
+
+  const currentLongestSide = Math.max(widthMm, heightMm);
+  const currentShortestSide = Math.min(widthMm, heightMm);
+
+  const referenceWidthMm = Math.max(presetLongestSide, currentLongestSide);
+  const referenceHeightMm = Math.max(presetShortestSide, currentShortestSide);
+
+  const availableW = preview.canvasW - preview.paddingPx * 2;
+  const availableH = preview.canvasH - preview.paddingPx * 2;
+
+  return Math.min(availableW / referenceWidthMm, availableH / referenceHeightMm);
 }
 
 export default function MatSimulator() {
@@ -99,10 +125,17 @@ export default function MatSimulator() {
         const smallest = Math.min(selectedPreset.widthMm, selectedPreset.heightMm);
         const largest = Math.max(selectedPreset.widthMm, selectedPreset.heightMm);
 
+        const nextWidthMm = c.orientation === "liggend" ? largest : smallest;
+        const nextHeightMm = c.orientation === "liggend" ? smallest : largest;
+
+        if (c.widthMm === nextWidthMm && c.heightMm === nextHeightMm) {
+          return c;
+        }
+
         return {
           ...c,
-          widthMm: c.orientation === "liggend" ? largest : smallest,
-          heightMm: c.orientation === "liggend" ? smallest : largest
+          widthMm: nextWidthMm,
+          heightMm: nextHeightMm
         };
       });
     }
@@ -205,7 +238,8 @@ export default function MatSimulator() {
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, PREVIEW.canvasW, PREVIEW.canvasH);
 
-    const mmToPx = computeMmToPxScale(config, PREVIEW);
+    const mmToPx = computeStableMmToPxScale(config.widthMm, config.heightMm, PREVIEW);
+
     const matWpx = config.widthMm * mmToPx;
     const matHpx = config.heightMm * mmToPx;
 
@@ -389,7 +423,6 @@ export default function MatSimulator() {
     const halfW = b.w / 2;
     const halfH = b.h / 2;
 
-    // outside top-right corner
     const x = b.cx + halfW + 18;
     const y = b.cy - halfH - 18;
     const r = 12;
@@ -558,13 +591,11 @@ export default function MatSimulator() {
 
     const { x, y } = canvasPoint(e);
 
-    // delete button first
     if (logoSelected && isPointInDeleteButton(x, y)) {
       deleteLogo();
       return;
     }
 
-    // resize handle (only if selected)
     if (logoSelected) {
       const handle = getHandleAtPoint(x, y);
       if (handle) {
@@ -584,7 +615,6 @@ export default function MatSimulator() {
       }
     }
 
-    // click inside logo => select + drag
     if (isPointInLogoBox(x, y)) {
       setLogoSelected(true);
       setDragging(true);
@@ -593,7 +623,6 @@ export default function MatSimulator() {
       return;
     }
 
-    // click background => deselect
     setLogoSelected(false);
     setDragging(false);
     setResizeHandle(null);
@@ -604,7 +633,6 @@ export default function MatSimulator() {
   function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
     const { x, y } = canvasPoint(e);
 
-    // resize mode
     if (resizeHandle) {
       const b = logoBoxRef.current;
       const s = resizeStartRef.current;
@@ -618,7 +646,6 @@ export default function MatSimulator() {
       return;
     }
 
-    // drag mode
     if (!dragging) return;
 
     let nextX = x + dragOffset.current.dx;
@@ -898,7 +925,7 @@ export default function MatSimulator() {
         <p className="mt-3 text-xs text-neutral-500">Tip: upload liefst een PNG met transparante achtergrond.</p>
 
         <div className="mt-3 text-xs text-neutral-500">
-          Actuele maat: {mmToCm(config.widthMm)} × {mmToCm(config.heightMm)} cm
+          Actuele maat (B × H): {mmToCm(config.widthMm)} × {mmToCm(config.heightMm)} cm
         </div>
       </section>
 
