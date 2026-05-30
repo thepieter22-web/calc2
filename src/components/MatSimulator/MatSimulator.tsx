@@ -18,8 +18,8 @@ const DEFAULT_CONFIG: MatConfig = {
   rubberRand: true,
 
   presetId: "60x85",
-  widthMm: 600,
-  heightMm: 850,
+  widthMm: 850,
+  heightMm: 600,
 
   matColor: "#1f2937"
 };
@@ -43,12 +43,10 @@ function cmToMm(cm: number) {
   return Math.round(cm * 10);
 }
 
-function formatCm(valueMm: number) {
-  return `${mmToCm(valueMm)} cm`;
-}
-
 function getPresetLabelCm(widthMm: number, heightMm: number) {
-  return `${mmToCm(widthMm)} × ${mmToCm(heightMm)} cm`;
+  const smallest = Math.min(widthMm, heightMm);
+  const largest = Math.max(widthMm, heightMm);
+  return `${mmToCm(smallest)} × ${mmToCm(largest)} cm`;
 }
 
 export default function MatSimulator() {
@@ -94,16 +92,21 @@ export default function MatSimulator() {
     return SIZE_PRESETS.find((p) => p.id === config.presetId);
   }, [config.presetId]);
 
-  // preset -> size
+  // preset -> size, rekening houdend met oriëntatie
   useEffect(() => {
     if (config.presetId !== "custom" && selectedPreset) {
-      setConfig((c) => ({
-        ...c,
-        widthMm: selectedPreset.widthMm,
-        heightMm: selectedPreset.heightMm
-      }));
+      setConfig((c) => {
+        const smallest = Math.min(selectedPreset.widthMm, selectedPreset.heightMm);
+        const largest = Math.max(selectedPreset.widthMm, selectedPreset.heightMm);
+
+        return {
+          ...c,
+          widthMm: c.orientation === "liggend" ? largest : smallest,
+          heightMm: c.orientation === "liggend" ? smallest : largest
+        };
+      });
     }
-  }, [config.presetId, selectedPreset]);
+  }, [config.presetId, selectedPreset, config.orientation]);
 
   // vloerkader => rubber rand off
   useEffect(() => {
@@ -117,8 +120,15 @@ export default function MatSimulator() {
     setConfig((c) => {
       const w = c.widthMm;
       const h = c.heightMm;
-      if (c.orientation === "staand" && w > h) return { ...c, widthMm: h, heightMm: w };
-      if (c.orientation === "liggend" && h > w) return { ...c, widthMm: h, heightMm: w };
+
+      if (c.orientation === "staand" && w > h) {
+        return { ...c, widthMm: h, heightMm: w };
+      }
+
+      if (c.orientation === "liggend" && h > w) {
+        return { ...c, widthMm: h, heightMm: w };
+      }
+
       return c;
     });
   }, [config.orientation]);
@@ -132,6 +142,7 @@ export default function MatSimulator() {
         logoImgRef.current = null;
         return;
       }
+
       try {
         const img = await loadImage(logo.dataUrl);
         if (!cancelled) logoImgRef.current = img;
@@ -141,6 +152,7 @@ export default function MatSimulator() {
     }
 
     void loadLogoImg();
+
     return () => {
       cancelled = true;
     };
@@ -183,6 +195,7 @@ export default function MatSimulator() {
   async function renderPreview() {
     const canvas = canvasRef.current;
     if (!canvas) return;
+
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
@@ -487,6 +500,7 @@ export default function MatSimulator() {
     const rr = clamp(parseInt(c.slice(0, 2), 16) + amount, 0, 255);
     const gg = clamp(parseInt(c.slice(2, 4), 16) + amount, 0, 255);
     const bb = clamp(parseInt(c.slice(4, 6), 16) + amount, 0, 255);
+
     return `#${rr.toString(16).padStart(2, "0")}${gg.toString(16).padStart(2, "0")}${bb
       .toString(16)
       .padStart(2, "0")}`;
@@ -619,6 +633,7 @@ export default function MatSimulator() {
         nextX = mat.cx;
         showV = true;
       }
+
       if (Math.abs(nextY - mat.cy) <= SNAP_PX) {
         nextY = mat.cy;
         showH = true;
@@ -651,6 +666,7 @@ export default function MatSimulator() {
   function exportPng() {
     const canvas = canvasRef.current;
     if (!canvas) return;
+
     const url = canvas.toDataURL("image/png");
     const a = document.createElement("a");
     a.href = url;
@@ -882,7 +898,7 @@ export default function MatSimulator() {
         <p className="mt-3 text-xs text-neutral-500">Tip: upload liefst een PNG met transparante achtergrond.</p>
 
         <div className="mt-3 text-xs text-neutral-500">
-          Actuele maat: {formatCm(config.widthMm)} × {formatCm(config.heightMm)}
+          Actuele maat: {mmToCm(config.widthMm)} × {mmToCm(config.heightMm)} cm
         </div>
       </section>
 
