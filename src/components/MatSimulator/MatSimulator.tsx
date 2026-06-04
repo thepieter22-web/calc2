@@ -134,135 +134,6 @@ function adjustColorForUse(hex: string, use: MatUse) {
   return `rgb(${nr}, ${ng}, ${nb})`;
 }
 
-function findOpaqueBounds(
-  imageData: ImageData,
-  alphaThreshold = 8
-): { left: number; top: number; right: number; bottom: number } | null {
-  const { data, width, height } = imageData;
-
-  let left = width;
-  let top = height;
-  let right = -1;
-  let bottom = -1;
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 4;
-      const a = data[i + 3];
-      if (a > alphaThreshold) {
-        if (x < left) left = x;
-        if (y < top) top = y;
-        if (x > right) right = x;
-        if (y > bottom) bottom = y;
-      }
-    }
-  }
-
-  if (right === -1 || bottom === -1) return null;
-  return { left, top, right, bottom };
-}
-
-function cleanTransparentHalo(
-  sourceCanvas: HTMLCanvasElement,
-  options?: {
-    alphaCutoff?: number;
-    hardCutoff?: number;
-  }
-) {
-  const alphaCutoff = options?.alphaCutoff ?? 28;
-  const hardCutoff = options?.hardCutoff ?? 12;
-
-  const ctx = sourceCanvas.getContext("2d");
-  if (!ctx) return;
-
-  const imageData = ctx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
-  const data = imageData.data;
-
-  for (let i = 0; i < data.length; i += 4) {
-    const a = data[i + 3];
-
-    if (a <= hardCutoff) {
-      data[i] = 0;
-      data[i + 1] = 0;
-      data[i + 2] = 0;
-      data[i + 3] = 0;
-      continue;
-    }
-
-    if (a < alphaCutoff) {
-      data[i] = 0;
-      data[i + 1] = 0;
-      data[i + 2] = 0;
-      data[i + 3] = 0;
-      continue;
-    }
-
-    if (a > 0 && a < 255) {
-      const alpha = a / 255;
-      data[i] = clamp(Math.round(data[i] / alpha), 0, 255);
-      data[i + 1] = clamp(Math.round(data[i + 1] / alpha), 0, 255);
-      data[i + 2] = clamp(Math.round(data[i + 2] / alpha), 0, 255);
-    }
-  }
-
-  ctx.putImageData(imageData, 0, 0);
-}
-
-async function prepareTransparentLogo(dataUrl: string): Promise<string> {
-  const img = await loadImage(dataUrl);
-
-  const baseCanvas = document.createElement("canvas");
-  baseCanvas.width = img.naturalWidth || img.width;
-  baseCanvas.height = img.naturalHeight || img.height;
-
-  const baseCtx = baseCanvas.getContext("2d");
-  if (!baseCtx) return dataUrl;
-
-  baseCtx.clearRect(0, 0, baseCanvas.width, baseCanvas.height);
-  baseCtx.imageSmoothingEnabled = true;
-  baseCtx.imageSmoothingQuality = "high";
-  baseCtx.drawImage(img, 0, 0);
-
-  cleanTransparentHalo(baseCanvas, {
-    alphaCutoff: 28,
-    hardCutoff: 12,
-  });
-
-  const bounds = findOpaqueBounds(
-    baseCtx.getImageData(0, 0, baseCanvas.width, baseCanvas.height),
-    10
-  );
-
-  if (!bounds) {
-    return dataUrl;
-  }
-
-  const pad = 2;
-  const sx = Math.max(0, bounds.left - pad);
-  const sy = Math.max(0, bounds.top - pad);
-  const sw = Math.min(baseCanvas.width - sx, bounds.right - bounds.left + 1 + pad * 2);
-  const sh = Math.min(baseCanvas.height - sy, bounds.bottom - bounds.top + 1 + pad * 2);
-
-  const cropped = document.createElement("canvas");
-  cropped.width = sw;
-  cropped.height = sh;
-
-  const croppedCtx = cropped.getContext("2d");
-  if (!croppedCtx) return dataUrl;
-
-  croppedCtx.clearRect(0, 0, sw, sh);
-  croppedCtx.imageSmoothingEnabled = true;
-  croppedCtx.imageSmoothingQuality = "high";
-  croppedCtx.drawImage(baseCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
-
-  cleanTransparentHalo(cropped, {
-    alphaCutoff: 32,
-    hardCutoff: 14,
-  });
-
-  return cropped.toDataURL("image/png");
-}
-
 function createMatTexture(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -270,12 +141,14 @@ function createMatTexture(
   w: number,
   h: number
 ) {
-  const imageData = ctx.createImageData(Math.max(1, Math.floor(w)), Math.max(1, Math.floor(h)));
+  const pixelW = Math.max(1, Math.floor(w));
+  const pixelH = Math.max(1, Math.floor(h));
+  const imageData = ctx.createImageData(pixelW, pixelH);
   const data = imageData.data;
 
-  for (let yy = 0; yy < imageData.height; yy++) {
-    for (let xx = 0; xx < imageData.width; xx++) {
-      const i = (yy * imageData.width + xx) * 4;
+  for (let yy = 0; yy < pixelH; yy++) {
+    for (let xx = 0; xx < pixelW; xx++) {
+      const i = (yy * pixelW + xx) * 4;
       const noise = 18 + Math.floor(Math.random() * 28);
       data[i] = noise;
       data[i + 1] = noise;
@@ -285,12 +158,13 @@ function createMatTexture(
   }
 
   const temp = document.createElement("canvas");
-  temp.width = imageData.width;
-  temp.height = imageData.height;
+  temp.width = pixelW;
+  temp.height = pixelH;
   const tctx = temp.getContext("2d");
   if (!tctx) return;
 
   tctx.putImageData(imageData, 0, 0);
+
   ctx.save();
   ctx.globalAlpha = 0.35;
   ctx.drawImage(temp, x, y, w, h);
@@ -363,11 +237,11 @@ export default function MatSimulator() {
     try {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // achtergrond UI canvas
+      // background
       ctx.fillStyle = "#f4f4f3";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // schaduw mat
+      // mat shadow
       ctx.save();
       ctx.shadowColor = "rgba(0,0,0,0.18)";
       ctx.shadowBlur = 20;
@@ -401,7 +275,7 @@ export default function MatSimulator() {
 
       ctx.restore();
 
-      // rubber rand
+      // rubber border
       if (config.rubberRand) {
         ctx.save();
         ctx.lineWidth = Math.max(8, Math.min(matRect.w, matRect.h) * 0.03);
@@ -411,13 +285,13 @@ export default function MatSimulator() {
         ctx.restore();
       }
 
-      // logo tekenen
+      // logo
       const drawSrc = logo.preparedDataUrl || logo.dataUrl;
       if (drawSrc) {
         const img = await loadImage(drawSrc);
 
-        const baseMaxW = matRect.w * 0.42;
-        const baseMaxH = matRect.h * 0.42;
+        const baseMaxW = matRect.w * 0.5;
+        const baseMaxH = matRect.h * 0.5;
 
         const imgRatio = img.width / img.height;
         let targetW = baseMaxW * logo.scale;
@@ -437,7 +311,6 @@ export default function MatSimulator() {
         ctx.rotate((logo.rotationDeg * Math.PI) / 180);
         ctx.globalAlpha = clamp(logo.opacity, 0, 1);
 
-        // extra veiligheid
         ctx.filter = "none";
         ctx.globalCompositeOperation = "source-over";
         ctx.imageSmoothingEnabled = true;
@@ -463,31 +336,17 @@ export default function MatSimulator() {
       const result = event.target?.result;
       if (typeof result !== "string") return;
 
-      try {
-        const prepared = await prepareTransparentLogo(result);
-
-        setLogo((prev) => ({
-          ...prev,
-          dataUrl: result,
-          preparedDataUrl: prepared,
-          x: PREVIEW.canvasW / 2,
-          y: PREVIEW.canvasH / 2,
-          scale: 1,
-          rotationDeg: 0,
-          opacity: 1,
-        }));
-      } catch {
-        setLogo((prev) => ({
-          ...prev,
-          dataUrl: result,
-          preparedDataUrl: result,
-          x: PREVIEW.canvasW / 2,
-          y: PREVIEW.canvasH / 2,
-          scale: 1,
-          rotationDeg: 0,
-          opacity: 1,
-        }));
-      }
+      // Use original file directly to preserve colors and quality
+      setLogo((prev) => ({
+        ...prev,
+        dataUrl: result,
+        preparedDataUrl: result,
+        x: PREVIEW.canvasW / 2,
+        y: PREVIEW.canvasH / 2,
+        scale: 1,
+        rotationDeg: 0,
+        opacity: 1,
+      }));
     };
 
     reader.readAsDataURL(file);
@@ -501,6 +360,7 @@ export default function MatSimulator() {
 
   const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!dragging) return;
+
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -578,6 +438,7 @@ export default function MatSimulator() {
       </div>
 
       <div className="grid grid-cols-12 gap-6 p-6">
+        {/* Left panel */}
         <div className="col-span-3 rounded-3xl border border-black/10 bg-white p-5 shadow-sm">
           <h2 className="mb-6 text-[32px] font-serif leading-none">Configure Your Mat</h2>
 
@@ -669,6 +530,7 @@ export default function MatSimulator() {
                     onClick={() => {
                       const smallest = Math.min(config.widthMm, config.heightMm);
                       const largest = Math.max(config.widthMm, config.heightMm);
+
                       setConfig((p) => ({
                         ...p,
                         orientation: "liggend",
@@ -688,6 +550,7 @@ export default function MatSimulator() {
                     onClick={() => {
                       const smallest = Math.min(config.widthMm, config.heightMm);
                       const largest = Math.max(config.widthMm, config.heightMm);
+
                       setConfig((p) => ({
                         ...p,
                         orientation: "staand",
@@ -829,8 +692,8 @@ export default function MatSimulator() {
               )}
 
               <div className="rounded-2xl border border-[#f4c46a] bg-[#fff8e8] px-4 py-3 text-sm text-[#9a5f00]">
-                Upload a PNG with transparent background for best results. We’ll clean soft edge
-                pixels automatically to avoid the grey/white haze.
+                Upload a PNG with transparent background for best results. Original logo colors
+                and quality are preserved.
               </div>
 
               <div>
@@ -896,6 +759,7 @@ export default function MatSimulator() {
           )}
         </div>
 
+        {/* Middle panel */}
         <div className="col-span-6 rounded-3xl border border-black/10 bg-white p-5 shadow-sm">
           <div className="mb-5 flex items-center justify-between">
             <h2 className="text-[32px] font-serif leading-none">Live Preview</h2>
@@ -925,13 +789,12 @@ export default function MatSimulator() {
               onPointerUp={handleCanvasPointerUp}
               onPointerLeave={handleCanvasPointerUp}
               className="h-auto w-full cursor-move rounded-2xl"
+              style={{ imageRendering: "auto" }}
             />
           </div>
 
           <div className="mt-4 flex items-center justify-between text-sm text-black/60">
-            <div>
-              Canvas: {PREVIEW.canvasW} × {PREVIEW.canvasH} px
-            </div>
+            <div>Canvas: {PREVIEW.canvasW} × {PREVIEW.canvasH} px</div>
             <div>
               Mat size: {Math.min(mmToCm(config.widthMm), mmToCm(config.heightMm))} ×{" "}
               {Math.max(mmToCm(config.widthMm), mmToCm(config.heightMm))} cm
@@ -939,6 +802,7 @@ export default function MatSimulator() {
           </div>
         </div>
 
+        {/* Right panel */}
         <div className="col-span-3 rounded-3xl border border-black/10 bg-white p-5 shadow-sm">
           <h2 className="mb-6 text-[32px] font-serif leading-none">Price Calculator</h2>
 
