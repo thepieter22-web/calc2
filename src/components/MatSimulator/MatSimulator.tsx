@@ -1,14 +1,41 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { LogoState, MatConfig, PreviewSettings } from "./types";
-import { SIZE_PRESETS } from "./presets";
-import { adjustColorForUse, clamp, loadImage } from "./utils";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+type MatUse = "binnen" | "buiten";
+type Placement = "vloer" | "verzonken";
+type Orientation = "liggend" | "staand";
+
+type MatConfig = {
+  use: MatUse;
+  placement: Placement;
+  orientation: Orientation;
+  rubberRand: boolean;
+  widthMm: number;
+  heightMm: number;
+  matColor: string;
+};
+
+type LogoState = {
+  dataUrl?: string;
+  preparedDataUrl?: string;
+  x: number; // center x on canvas
+  y: number; // center y on canvas
+  scale: number;
+  rotationDeg: number;
+  opacity: number;
+};
+
+type PreviewSettings = {
+  canvasW: number;
+  canvasH: number;
+  paddingPx: number;
+};
 
 const PREVIEW: PreviewSettings = {
   canvasW: 900,
   canvasH: 560,
-  paddingPx: 36
+  paddingPx: 36,
 };
 
 const DEFAULT_CONFIG: MatConfig = {
@@ -16,24 +43,31 @@ const DEFAULT_CONFIG: MatConfig = {
   placement: "vloer",
   orientation: "liggend",
   rubberRand: true,
-
-  presetId: "60x85",
   widthMm: 850,
   heightMm: 600,
-
-  matColor: "#1f2937"
+  matColor: "#2d2d2d",
 };
 
 const DEFAULT_LOGO: LogoState = {
   dataUrl: undefined,
+  preparedDataUrl: undefined,
   x: PREVIEW.canvasW / 2,
   y: PREVIEW.canvasH / 2,
   scale: 1,
   rotationDeg: 0,
-  opacity: 1
+  opacity: 1,
 };
 
-const SNAP_PX = 10;
+const SIZE_PRESETS = [
+  { id: "60x85", widthMm: 850, heightMm: 600, label: "60 × 85 cm" },
+  { id: "85x115", widthMm: 1150, heightMm: 850, label: "85 × 115 cm" },
+  { id: "115x180", widthMm: 1800, heightMm: 1150, label: "115 × 180 cm" },
+  { id: "150x250", widthMm: 2500, heightMm: 1500, label: "150 × 250 cm" },
+];
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
 
 function mmToCm(mm: number) {
   return mm / 10;
@@ -50,948 +84,990 @@ function getPresetLabelCm(widthMm: number, heightMm: number) {
 }
 
 /**
- * Vaste schaal voor de preview:
- * - standaardmaten worden relatief correct weergegeven
- * - grotere matten blijven visueel groter dan kleinere
- * - custom maten groter dan de grootste preset krijgen ook correct een kleinere schaal
+ * Zorgt dat elke maat visueel stabiel wordt getoond.
  */
-function computeStableMmToPxScale(
-  widthMm: number,
-  heightMm: number,
-  preview: PreviewSettings
+function computeStableMmToPxScale(widthMm: number, heightMm: number, preview: PreviewSettings) {
+  const maxPresetLongest = Math.max(
+    ...SIZE_PRESETS.map((p) => Math.max(p.widthMm, p.heightMm))
+  );
+  const maxPresetShortest = Math.max(
+    ...SIZE_PRESETS.map((p) => Math.min(p.widthMm, p.heightMm))
+  );
+
+  const currentLongest = Math.max(widthMm, heightMm);
+  const currentShortest = Math.min(widthMm, heightMm);
+
+  const drawableW = preview.canvasW - preview.paddingPx * 2;
+  const drawableH = preview.canvasH - preview.paddingPx * 2;
+
+  const scaleByLongest = drawableW / Math.max(maxPresetLongest, currentLongest);
+  const scaleByShortest = drawableH / Math.max(maxPresetShortest, currentShortest);
+
+  return Math.min(scaleByLongest, scaleByShortest);
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+/**
+ * Donkere of lichtere matkleur afhankelijk van gekozen use.
+ */
+function adjustColorForUse(hex: string, use: MatUse) {
+  const safe = hex.replace("#", "");
+  if (safe.length !== 6) return hex;
+
+  const r = parseInt(safe.slice(0, 2), 16);
+  const g = parseInt(safe.slice(2, 4), 16);
+  const b = parseInt(safe.slice(4, 6), 16);
+
+  const factor = use === "buiten" ? 0.88 : 1;
+
+  const nr = clamp(Math.round(r * factor), 0, 255);
+  const ng = clamp(Math.round(g * factor), 0, 255);
+  const nb = clamp(Math.round(b * factor), 0, 255);
+
+  return `rgb(${nr}, ${ng}, ${nb})`;
+}
+
+/**
+ * Detecteert de niet-transparante bounding box van een logo.
+ */
+function findOpaqueBounds(
+  imageData: ImageData,
+  alphaThreshold = 8
+): { left: number; top: number; right: number; bottom: number } | null {
+  const { data, width, height } = imageData;
+
+  let left = width;
+  let top = height;
+  let right = -1;
+  let bottom = -1;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      const a = data[i + 3];
+      if (a > alphaThreshold) {
+        if (x < left) left = x;
+        if (y < top) top = y;
+        if (x > right) right = x;
+        if (y > bottom) bottom = y;
+      }
+    }
+  }
+
+  if (right === -1 || bottom === -1) return null;
+  return { left, top, right, bottom };
+}
+
+/**
+ * Verwijdert halo / waas aan transparante randen.
+ *
+ * 1. Pixels met zeer lage alpha => volledig transparant
+ * 2. Pixels met gedeeltelijke alpha => RGB "un-premultiply" om witte fringe te verminderen
+ * 3. Optioneel agressievere threshold aan buitenrand
+ */
+function cleanTransparentHalo(
+  sourceCanvas: HTMLCanvasElement,
+  options?: {
+    alphaCutoff?: number;
+    hardCutoff?: number;
+  }
 ) {
-  const presetLongestSide = Math.max(...SIZE_PRESETS.map((p) => Math.max(p.widthMm, p.heightMm)));
-  const presetShortestSide = Math.max(...SIZE_PRESETS.map((p) => Math.min(p.widthMm, p.heightMm)));
+  const alphaCutoff = options?.alphaCutoff ?? 18;
+  const hardCutoff = options?.hardCutoff ?? 6;
 
-  const currentLongestSide = Math.max(widthMm, heightMm);
-  const currentShortestSide = Math.min(widthMm, heightMm);
+  const ctx = sourceCanvas.getContext("2d");
+  if (!ctx) return;
 
-  const referenceWidthMm = Math.max(presetLongestSide, currentLongestSide);
-  const referenceHeightMm = Math.max(presetShortestSide, currentShortestSide);
+  const imageData = ctx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+  const data = imageData.data;
 
-  const availableW = preview.canvasW - preview.paddingPx * 2;
-  const availableH = preview.canvasH - preview.paddingPx * 2;
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3];
 
-  return Math.min(availableW / referenceWidthMm, availableH / referenceHeightMm);
+    // Volledig weggooien van bijna-transparante pixels
+    if (a <= hardCutoff) {
+      data[i] = 0;
+      data[i + 1] = 0;
+      data[i + 2] = 0;
+      data[i + 3] = 0;
+      continue;
+    }
+
+    // Zachte randpixels proper maken
+    if (a < alphaCutoff) {
+      data[i] = 0;
+      data[i + 1] = 0;
+      data[i + 2] = 0;
+      data[i + 3] = 0;
+      continue;
+    }
+
+    // Un-premultiply om witte matte/fringe tegen te gaan
+    if (a > 0 && a < 255) {
+      const alpha = a / 255;
+      data[i] = clamp(Math.round(data[i] / alpha), 0, 255);
+      data[i + 1] = clamp(Math.round(data[i + 1] / alpha), 0, 255);
+      data[i + 2] = clamp(Math.round(data[i + 2] / alpha), 0, 255);
+    }
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+}
+
+/**
+ * Crop transparante rand weg + cleanup halo.
+ */
+async function prepareTransparentLogo(dataUrl: string): Promise<string> {
+  const img = await loadImage(dataUrl);
+
+  const baseCanvas = document.createElement("canvas");
+  baseCanvas.width = img.naturalWidth || img.width;
+  baseCanvas.height = img.naturalHeight || img.height;
+
+  const baseCtx = baseCanvas.getContext("2d");
+  if (!baseCtx) return dataUrl;
+
+  baseCtx.clearRect(0, 0, baseCanvas.width, baseCanvas.height);
+  baseCtx.imageSmoothingEnabled = true;
+  baseCtx.imageSmoothingQuality = "high";
+  baseCtx.drawImage(img, 0, 0);
+
+  // Cleanup tegen waas
+  cleanTransparentHalo(baseCanvas, {
+    alphaCutoff: 18,
+    hardCutoff: 6,
+  });
+
+  const bounds = findOpaqueBounds(
+    baseCtx.getImageData(0, 0, baseCanvas.width, baseCanvas.height),
+    10
+  );
+
+  if (!bounds) {
+    return dataUrl;
+  }
+
+  const pad = 2;
+  const sx = Math.max(0, bounds.left - pad);
+  const sy = Math.max(0, bounds.top - pad);
+  const sw = Math.min(baseCanvas.width - sx, bounds.right - bounds.left + 1 + pad * 2);
+  const sh = Math.min(baseCanvas.height - sy, bounds.bottom - bounds.top + 1 + pad * 2);
+
+  const cropped = document.createElement("canvas");
+  cropped.width = sw;
+  cropped.height = sh;
+
+  const croppedCtx = cropped.getContext("2d");
+  if (!croppedCtx) return dataUrl;
+
+  croppedCtx.clearRect(0, 0, sw, sh);
+  croppedCtx.imageSmoothingEnabled = true;
+  croppedCtx.imageSmoothingQuality = "high";
+  croppedCtx.drawImage(baseCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+
+  // Tweede pass cleanup na crop
+  cleanTransparentHalo(cropped, {
+    alphaCutoff: 20,
+    hardCutoff: 8,
+  });
+
+  return cropped.toDataURL("image/png");
+}
+
+function createMatTexture(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
+  // basis vezelstructuur
+  const imageData = ctx.createImageData(Math.max(1, Math.floor(w)), Math.max(1, Math.floor(h)));
+  const data = imageData.data;
+
+  for (let yy = 0; yy < imageData.height; yy++) {
+    for (let xx = 0; xx < imageData.width; xx++) {
+      const i = (yy * imageData.width + xx) * 4;
+      const noise = 18 + Math.floor(Math.random() * 28);
+      data[i] = noise;
+      data[i + 1] = noise;
+      data[i + 2] = noise;
+      data[i + 3] = 24;
+    }
+  }
+
+  const temp = document.createElement("canvas");
+  temp.width = imageData.width;
+  temp.height = imageData.height;
+  const tctx = temp.getContext("2d");
+  if (!tctx) return;
+
+  tctx.putImageData(imageData, 0, 0);
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  ctx.drawImage(temp, x, y, w, h);
+  ctx.restore();
+}
+
+function getUnitPrice(config: MatConfig) {
+  const areaM2 = (config.widthMm / 1000) * (config.heightMm / 1000);
+
+  let basePerM2 = config.use === "buiten" ? 42 : 35;
+
+  if (config.placement === "verzonken") basePerM2 += 3;
+  if (config.rubberRand) basePerM2 *= 1.15;
+
+  const subtotal = areaM2 * basePerM2;
+  return Math.max(18, Number(subtotal.toFixed(2)));
 }
 
 export default function MatSimulator() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const [activeTab, setActiveTab] = useState<"mat" | "colors" | "logo">("logo");
   const [config, setConfig] = useState<MatConfig>(DEFAULT_CONFIG);
   const [logo, setLogo] = useState<LogoState>(DEFAULT_LOGO);
-
-  // selection: handles only when selected
-  const [logoSelected, setLogoSelected] = useState(false);
-
-  // drag state
   const [dragging, setDragging] = useState(false);
-  const dragOffset = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+  const [rendering, setRendering] = useState(false);
 
-  // resize state
-  const [resizeHandle, setResizeHandle] = useState<null | "nw" | "ne" | "sw" | "se">(null);
-  const resizeStartRef = useRef<{ startScale: number; startDist: number } | null>(null);
+  const mmToPx = useMemo(() => {
+    return computeStableMmToPxScale(config.widthMm, config.heightMm, PREVIEW);
+  }, [config.widthMm, config.heightMm]);
 
-  // bbox from last draw (axis-aligned; rotation ignored for hit tests)
-  const logoBoxRef = useRef<{ cx: number; cy: number; w: number; h: number; rotationDeg: number } | null>(null);
+  const matPixelSize = useMemo(() => {
+    const w = config.widthMm * mmToPx;
+    const h = config.heightMm * mmToPx;
+    return { w, h };
+  }, [config.widthMm, config.heightMm, mmToPx]);
 
-  // delete button hitbox on canvas
-  const deleteBtnRef = useRef<{ x: number; y: number; r: number } | null>(null);
-
-  // cache loaded logo image
-  const logoImgRef = useRef<HTMLImageElement | null>(null);
-
-  // mat rect for snapping
-  const matRectRef = useRef<{ x: number; y: number; w: number; h: number; cx: number; cy: number } | null>(null);
-
-  // snap guide flags
-  const snapGuidesRef = useRef<{ showV: boolean; showH: boolean }>({ showV: false, showH: false });
-
-  // force redraw when guides clear
-  const [guideTick, setGuideTick] = useState(0);
-
-  // status + modal preview
-  const [status, setStatus] = useState<string>("");
-  const [renderPreviewUrl, setRenderPreviewUrl] = useState<string | null>(null);
-
-  const selectedPreset = useMemo(() => {
-    return SIZE_PRESETS.find((p) => p.id === config.presetId);
-  }, [config.presetId]);
-
-  // preset -> size, rekening houdend met oriëntatie
-  useEffect(() => {
-    if (config.presetId !== "custom" && selectedPreset) {
-      setConfig((c) => {
-        const smallest = Math.min(selectedPreset.widthMm, selectedPreset.heightMm);
-        const largest = Math.max(selectedPreset.widthMm, selectedPreset.heightMm);
-
-        const nextWidthMm = c.orientation === "liggend" ? largest : smallest;
-        const nextHeightMm = c.orientation === "liggend" ? smallest : largest;
-
-        if (c.widthMm === nextWidthMm && c.heightMm === nextHeightMm) {
-          return c;
-        }
-
-        return {
-          ...c,
-          widthMm: nextWidthMm,
-          heightMm: nextHeightMm
-        };
-      });
-    }
-  }, [config.presetId, selectedPreset, config.orientation]);
-
-  // vloerkader => rubber rand off
-  useEffect(() => {
-    if (config.placement === "vloerkader" && config.rubberRand) {
-      setConfig((c) => ({ ...c, rubberRand: false }));
-    }
-  }, [config.placement, config.rubberRand]);
-
-  // orientation -> swap if needed
-  useEffect(() => {
-    setConfig((c) => {
-      const w = c.widthMm;
-      const h = c.heightMm;
-
-      if (c.orientation === "staand" && w > h) {
-        return { ...c, widthMm: h, heightMm: w };
-      }
-
-      if (c.orientation === "liggend" && h > w) {
-        return { ...c, widthMm: h, heightMm: w };
-      }
-
-      return c;
-    });
-  }, [config.orientation]);
-
-  // load logo image when dataUrl changes
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadLogoImg() {
-      if (!logo.dataUrl) {
-        logoImgRef.current = null;
-        return;
-      }
-
-      try {
-        const img = await loadImage(logo.dataUrl);
-        if (!cancelled) logoImgRef.current = img;
-      } catch {
-        if (!cancelled) logoImgRef.current = null;
-      }
-    }
-
-    void loadLogoImg();
-
-    return () => {
-      cancelled = true;
+  const matRect = useMemo(() => {
+    const x = (PREVIEW.canvasW - matPixelSize.w) / 2;
+    const y = (PREVIEW.canvasH - matPixelSize.h) / 2;
+    return {
+      x,
+      y,
+      w: matPixelSize.w,
+      h: matPixelSize.h,
     };
-  }, [logo.dataUrl]);
+  }, [matPixelSize]);
 
-  // keyboard delete/backspace when selected
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (!logoSelected) return;
-      if (!logo.dataUrl) return;
+  const price = useMemo(() => {
+    const unit = getUnitPrice(config);
+    const vat = Number((unit * 0.21).toFixed(2));
+    const total = Number((unit + vat).toFixed(2));
+    return { unit, vat, total };
+  }, [config]);
 
-      if (e.key === "Delete" || e.key === "Backspace") {
-        e.preventDefault();
-        deleteLogo();
-        return;
-      }
+  const selectedSizeLabel = useMemo(() => {
+    return getPresetLabelCm(config.widthMm, config.heightMm);
+  }, [config.widthMm, config.heightMm]);
 
-      if (e.key === "Escape") {
-        setLogoSelected(false);
-        clearSnapGuides();
-      }
-    }
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [logoSelected, logo.dataUrl]);
-
-  // render canvas when state changes
-  useEffect(() => {
-    void renderPreview();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config, logo, logoSelected, guideTick]);
-
-  function clearSnapGuides() {
-    snapGuidesRef.current = { showV: false, showH: false };
-    setGuideTick((t) => t + 1);
-  }
-
-  async function renderPreview() {
+  const drawPreview = useCallback(async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    ctx.clearRect(0, 0, PREVIEW.canvasW, PREVIEW.canvasH);
+    setRendering(true);
 
-    // white background
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, PREVIEW.canvasW, PREVIEW.canvasH);
+    try {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const mmToPx = computeStableMmToPxScale(config.widthMm, config.heightMm, PREVIEW);
+      // achtergrond UI canvas
+      ctx.fillStyle = "#f4f4f3";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    const matWpx = config.widthMm * mmToPx;
-    const matHpx = config.heightMm * mmToPx;
-
-    const matX = (PREVIEW.canvasW - matWpx) / 2;
-    const matY = (PREVIEW.canvasH - matHpx) / 2;
-
-    matRectRef.current = {
-      x: matX,
-      y: matY,
-      w: matWpx,
-      h: matHpx,
-      cx: matX + matWpx / 2,
-      cy: matY + matHpx / 2
-    };
-
-    const r = config.placement === "vloer" || config.placement === "vloerkader" ? 0 : 18;
-
-    drawScene(ctx, matX, matY, matWpx, matHpx);
-
-    const baseColor = adjustColorForUse(config.matColor, config.use);
-    drawMat(ctx, matX, matY, matWpx, matHpx, baseColor, r);
-
-    if (config.rubberRand && config.placement !== "vloerkader") {
-      drawRubberBorder(ctx, matX, matY, matWpx, matHpx, r);
-    }
-
-    // snap guides
-    if (logoSelected) drawSnapGuides(ctx);
-
-    // logo
-    const img = logoImgRef.current;
-    if (logo.dataUrl && img) {
-      const target = Math.min(matWpx, matHpx) * 0.55;
-      const fitScale = Math.min(target / img.width, target / img.height);
-      const finalScale = fitScale * logo.scale;
-
-      const drawW = img.width * finalScale;
-      const drawH = img.height * finalScale;
-
-      logoBoxRef.current = {
-        cx: logo.x,
-        cy: logo.y,
-        w: drawW,
-        h: drawH,
-        rotationDeg: logo.rotationDeg
-      };
-
+      // schaduw mat
       ctx.save();
-      ctx.globalAlpha = clamp(logo.opacity, 0, 1);
-      ctx.translate(logo.x, logo.y);
-      ctx.rotate((logo.rotationDeg * Math.PI) / 180);
-      ctx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+      ctx.shadowColor = "rgba(0,0,0,0.18)";
+      ctx.shadowBlur = 20;
+      ctx.shadowOffsetY = 8;
+      ctx.fillStyle = "#00000010";
+      roundRect(ctx, matRect.x, matRect.y, matRect.w, matRect.h, 12);
+      ctx.fill();
       ctx.restore();
 
-      if (logoSelected) {
-        drawLogoGuides(ctx, logo.x, logo.y);
-        drawResizeHandles(ctx);
-        drawDeleteButton(ctx);
-      } else {
-        deleteBtnRef.current = null;
+      // mat body
+      const matColor = adjustColorForUse(config.matColor, config.use);
+
+      ctx.save();
+      roundRect(ctx, matRect.x, matRect.y, matRect.w, matRect.h, 10);
+      ctx.clip();
+
+      const matGradient = ctx.createLinearGradient(
+        matRect.x,
+        matRect.y,
+        matRect.x + matRect.w,
+        matRect.y + matRect.h
+      );
+      matGradient.addColorStop(0, shadeColor(matColor, -12));
+      matGradient.addColorStop(0.5, matColor);
+      matGradient.addColorStop(1, shadeColor(matColor, -18));
+
+      ctx.fillStyle = matGradient;
+      ctx.fillRect(matRect.x, matRect.y, matRect.w, matRect.h);
+
+      createMatTexture(ctx, matRect.x, matRect.y, matRect.w, matRect.h);
+
+      ctx.restore();
+
+      // rubber rand
+      if (config.rubberRand) {
+        ctx.save();
+        ctx.lineWidth = Math.max(8, Math.min(matRect.w, matRect.h) * 0.03);
+        ctx.strokeStyle = "rgba(10, 10, 10, 0.72)";
+        roundRect(ctx, matRect.x + 4, matRect.y + 4, matRect.w - 8, matRect.h - 8, 10);
+        ctx.stroke();
+        ctx.restore();
       }
-    } else {
-      logoBoxRef.current = null;
-      deleteBtnRef.current = null;
+
+      // subtiele binnenvlek / pile verschil op mat
+      ctx.save();
+      ctx.fillStyle = "rgba(255,255,255,0.035)";
+      const innerW = matRect.w * 0.42;
+      const innerH = matRect.h * 0.34;
+      const innerX = matRect.x + (matRect.w - innerW) / 2;
+      const innerY = matRect.y + (matRect.h - innerH) / 2;
+      ctx.fillRect(innerX, innerY, innerW, innerH);
+      ctx.restore();
+
+      // logo tekenen
+      const drawSrc = logo.preparedDataUrl || logo.dataUrl;
+      if (drawSrc) {
+        const img = await loadImage(drawSrc);
+
+        const baseMaxW = matRect.w * 0.42;
+        const baseMaxH = matRect.h * 0.42;
+
+        const imgRatio = img.width / img.height;
+        let targetW = baseMaxW * logo.scale;
+        let targetH = targetW / imgRatio;
+
+        if (targetH > baseMaxH * logo.scale) {
+          targetH = baseMaxH * logo.scale;
+          targetW = targetH * imgRatio;
+        }
+
+        ctx.save();
+
+        // Clip tot binnen de mat zodat niets erbuiten tekent
+        roundRect(ctx, matRect.x, matRect.y, matRect.w, matRect.h, 10);
+        ctx.clip();
+
+        ctx.translate(logo.x, logo.y);
+        ctx.rotate((logo.rotationDeg * Math.PI) / 180);
+        ctx.globalAlpha = clamp(logo.opacity, 0, 1);
+
+        // GEEN shadow, GEEN filter, GEEN backplate => geen kunstmatige waas
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+
+        ctx.drawImage(
+          img,
+          -targetW / 2,
+          -targetH / 2,
+          targetW,
+          targetH
+        );
+
+        ctx.restore();
+      }
+    } finally {
+      setRendering(false);
     }
+  }, [config, logo, matRect]);
 
-    // overlay border NOT for vloerkader
-    if (config.placement !== "vloerkader") {
-      drawOverlay(ctx, matX, matY, matWpx, matHpx, r);
-    }
-  }
+  useEffect(() => {
+    drawPreview();
+  }, [drawPreview]);
 
-  function drawScene(ctx: CanvasRenderingContext2D, matX: number, matY: number, matW: number, matH: number) {
-    ctx.fillStyle = "#f5f5f5";
-    ctx.fillRect(0, 0, PREVIEW.canvasW, PREVIEW.canvasH);
-
-    ctx.save();
-    ctx.fillStyle = "rgba(0,0,0,0.12)";
-    ctx.filter = "blur(10px)";
-    ctx.fillRect(matX + 8, matY + 10, matW, matH);
-    ctx.restore();
-
-    if (config.placement === "vloerkader") {
-      const framePad = 16;
-      ctx.fillStyle = "#d4d4d4";
-      ctx.fillRect(matX - framePad, matY - framePad, matW + framePad * 2, matH + framePad * 2);
-      ctx.strokeStyle = "#a3a3a3";
-      ctx.lineWidth = 3;
-      ctx.strokeRect(matX - framePad, matY - framePad, matW + framePad * 2, matH + framePad * 2);
-    }
-  }
-
-  function drawMat(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color: string, r: number) {
-    const grad = ctx.createLinearGradient(x, y, x + w, y + h);
-    grad.addColorStop(0, color);
-    grad.addColorStop(1, shade(color, -10));
-
-    ctx.fillStyle = grad;
-    roundRect(ctx, x, y, w, h, r);
-    ctx.fill();
-  }
-
-  function drawRubberBorder(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-    ctx.save();
-    ctx.strokeStyle = "rgba(0,0,0,0.55)";
-    ctx.lineWidth = 10;
-    roundRect(ctx, x + 4, y + 4, w - 8, h - 8, r);
-    ctx.stroke();
-
-    ctx.strokeStyle = "rgba(255,255,255,0.18)";
-    ctx.lineWidth = 3;
-    roundRect(ctx, x + 10, y + 10, w - 20, h - 20, r);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawOverlay(ctx: CanvasRenderingContext2D, matX: number, matY: number, matW: number, matH: number, r: number) {
-    ctx.save();
-    ctx.strokeStyle = "rgba(0,0,0,0.2)";
-    ctx.lineWidth = 1;
-    roundRect(ctx, matX, matY, matW, matH, r);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawLogoGuides(ctx: CanvasRenderingContext2D, cx: number, cy: number) {
-    ctx.save();
-    ctx.globalAlpha = 0.25;
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(cx - 10, cy);
-    ctx.lineTo(cx + 10, cy);
-    ctx.moveTo(cx, cy - 10);
-    ctx.lineTo(cx, cy + 10);
-    ctx.stroke();
-
-    ctx.globalAlpha = 0.12;
-    ctx.strokeStyle = "#000000";
-    ctx.beginPath();
-    ctx.arc(cx, cy, 18, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawResizeHandles(ctx: CanvasRenderingContext2D) {
-    const b = logoBoxRef.current;
-    if (!b) return;
-
-    const halfW = b.w / 2;
-    const halfH = b.h / 2;
-
-    const corners = [
-      { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
-      { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
-      { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
-      { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
-    ];
-
-    ctx.save();
-    for (const c of corners) {
-      ctx.fillStyle = "#2563eb";
-      ctx.beginPath();
-      ctx.arc(c.x, c.y, 8, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.strokeStyle = "white";
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  function drawDeleteButton(ctx: CanvasRenderingContext2D) {
-    const b = logoBoxRef.current;
-    if (!b) {
-      deleteBtnRef.current = null;
-      return;
-    }
-
-    const halfW = b.w / 2;
-    const halfH = b.h / 2;
-
-    const x = b.cx + halfW + 18;
-    const y = b.cy - halfH - 18;
-    const r = 12;
-
-    deleteBtnRef.current = { x, y, r };
-
-    ctx.save();
-    ctx.fillStyle = "#dc2626";
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 3;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(x - 5, y - 5);
-    ctx.lineTo(x + 5, y + 5);
-    ctx.moveTo(x + 5, y - 5);
-    ctx.lineTo(x - 5, y + 5);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawSnapGuides(ctx: CanvasRenderingContext2D) {
-    const mat = matRectRef.current;
-    if (!mat) return;
-
-    const { showV, showH } = snapGuidesRef.current;
-    if (!showV && !showH) return;
-
-    ctx.save();
-    ctx.strokeStyle = "rgba(59,130,246,0.85)";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([6, 6]);
-
-    if (showV) {
-      ctx.beginPath();
-      ctx.moveTo(mat.cx, mat.y);
-      ctx.lineTo(mat.cx, mat.y + mat.h);
-      ctx.stroke();
-    }
-
-    if (showH) {
-      ctx.beginPath();
-      ctx.moveTo(mat.x, mat.cy);
-      ctx.lineTo(mat.x + mat.w, mat.cy);
-      ctx.stroke();
-    }
-
-    ctx.restore();
-  }
-
-  function getHandleAtPoint(x: number, y: number): null | "nw" | "ne" | "sw" | "se" {
-    const b = logoBoxRef.current;
-    if (!b) return null;
-
-    const halfW = b.w / 2;
-    const halfH = b.h / 2;
-
-    const corners = [
-      { id: "nw" as const, x: b.cx - halfW, y: b.cy - halfH },
-      { id: "ne" as const, x: b.cx + halfW, y: b.cy - halfH },
-      { id: "sw" as const, x: b.cx - halfW, y: b.cy + halfH },
-      { id: "se" as const, x: b.cx + halfW, y: b.cy + halfH }
-    ];
-
-    const R = 12;
-    for (const c of corners) {
-      const dx = x - c.x;
-      const dy = y - c.y;
-      if (dx * dx + dy * dy <= R * R) return c.id;
-    }
-    return null;
-  }
-
-  function isPointInDeleteButton(x: number, y: number) {
-    const btn = deleteBtnRef.current;
-    if (!btn) return false;
-    const dx = x - btn.x;
-    const dy = y - btn.y;
-    return dx * dx + dy * dy <= btn.r * btn.r;
-  }
-
-  function isPointInLogoBox(x: number, y: number) {
-    const b = logoBoxRef.current;
-    if (!b) return false;
-
-    const halfW = b.w / 2;
-    const halfH = b.h / 2;
-
-    return x >= b.cx - halfW && x <= b.cx + halfW && y >= b.cy - halfH && y <= b.cy + halfH;
-  }
-
-  function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
-    const radius = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    ctx.moveTo(x + radius, y);
-    ctx.arcTo(x + w, y, x + w, y + h, radius);
-    ctx.arcTo(x + w, y + h, x, y + h, radius);
-    ctx.arcTo(x, y + h, x, y, radius);
-    ctx.arcTo(x, y, x + w, y, radius);
-    ctx.closePath();
-  }
-
-  function shade(hex: string, amount: number) {
-    const c = hex.replace("#", "");
-    const rr = clamp(parseInt(c.slice(0, 2), 16) + amount, 0, 255);
-    const gg = clamp(parseInt(c.slice(2, 4), 16) + amount, 0, 255);
-    const bb = clamp(parseInt(c.slice(4, 6), 16) + amount, 0, 255);
-
-    return `#${rr.toString(16).padStart(2, "0")}${gg.toString(16).padStart(2, "0")}${bb
-      .toString(16)
-      .padStart(2, "0")}`;
-  }
-
-  function canvasPoint(e: React.PointerEvent<HTMLCanvasElement>) {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * PREVIEW.canvasW;
-    const y = ((e.clientY - rect.top) / rect.height) * PREVIEW.canvasH;
-    return { x, y };
-  }
-
-  async function onLogoFile(file: File | null) {
-    if (!file) return;
-
+  const handleLogoUpload = async (file: File) => {
     const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result);
 
-      setLogo({
-        ...DEFAULT_LOGO,
-        dataUrl,
-        x: PREVIEW.canvasW / 2,
-        y: PREVIEW.canvasH / 2,
-        scale: 1,
-        rotationDeg: 0,
-        opacity: 1
-      });
+    reader.onload = async (event) => {
+      const result = event.target?.result;
+      if (typeof result !== "string") return;
 
-      setLogoSelected(true);
-      clearSnapGuides();
+      try {
+        const prepared = await prepareTransparentLogo(result);
+
+        setLogo((prev) => ({
+          ...prev,
+          dataUrl: result,
+          preparedDataUrl: prepared,
+          x: PREVIEW.canvasW / 2,
+          y: PREVIEW.canvasH / 2,
+          scale: 1,
+          rotationDeg: 0,
+          opacity: 1,
+        }));
+      } catch {
+        setLogo((prev) => ({
+          ...prev,
+          dataUrl: result,
+          preparedDataUrl: result,
+          x: PREVIEW.canvasW / 2,
+          y: PREVIEW.canvasH / 2,
+          scale: 1,
+          rotationDeg: 0,
+          opacity: 1,
+        }));
+      }
     };
 
     reader.readAsDataURL(file);
-  }
+  };
 
-  function deleteLogo() {
-    setLogo(DEFAULT_LOGO);
-    setLogoSelected(false);
-    setDragging(false);
-    setResizeHandle(null);
-    resizeStartRef.current = null;
-    logoImgRef.current = null;
-    logoBoxRef.current = null;
-    deleteBtnRef.current = null;
-    clearSnapGuides();
-  }
+  const handleCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!logo.dataUrl && !logo.preparedDataUrl) return;
+    (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
+    setDragging(true);
+  };
 
-  function onPointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-    if (!logo.dataUrl) {
-      setLogoSelected(false);
-      clearSnapGuides();
-      return;
-    }
-
-    const { x, y } = canvasPoint(e);
-
-    if (logoSelected && isPointInDeleteButton(x, y)) {
-      deleteLogo();
-      return;
-    }
-
-    if (logoSelected) {
-      const handle = getHandleAtPoint(x, y);
-      if (handle) {
-        setResizeHandle(handle);
-
-        const b = logoBoxRef.current;
-        if (b) {
-          const dist = Math.hypot(x - b.cx, y - b.cy);
-          resizeStartRef.current = {
-            startScale: logo.scale,
-            startDist: Math.max(dist, 1)
-          };
-        }
-
-        e.currentTarget.setPointerCapture(e.pointerId);
-        return;
-      }
-    }
-
-    if (isPointInLogoBox(x, y)) {
-      setLogoSelected(true);
-      setDragging(true);
-      dragOffset.current = { dx: logo.x - x, dy: logo.y - y };
-      e.currentTarget.setPointerCapture(e.pointerId);
-      return;
-    }
-
-    setLogoSelected(false);
-    setDragging(false);
-    setResizeHandle(null);
-    resizeStartRef.current = null;
-    clearSnapGuides();
-  }
-
-  function onPointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
-    const { x, y } = canvasPoint(e);
-
-    if (resizeHandle) {
-      const b = logoBoxRef.current;
-      const s = resizeStartRef.current;
-      if (!b || !s) return;
-
-      const dist = Math.hypot(x - b.cx, y - b.cy);
-      const factor = dist / s.startDist;
-      const nextScale = clamp(s.startScale * factor, 0.2, 3);
-
-      setLogo((l) => ({ ...l, scale: nextScale }));
-      return;
-    }
-
+  const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!dragging) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
 
-    let nextX = x + dragOffset.current.dx;
-    let nextY = y + dragOffset.current.dy;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = PREVIEW.canvasW / rect.width;
+    const scaleY = PREVIEW.canvasH / rect.height;
 
-    const mat = matRectRef.current;
-    let showV = false;
-    let showH = false;
+    let x = (e.clientX - rect.left) * scaleX;
+    let y = (e.clientY - rect.top) * scaleY;
 
-    if (mat) {
-      if (Math.abs(nextX - mat.cx) <= SNAP_PX) {
-        nextX = mat.cx;
-        showV = true;
-      }
+    const centerX = PREVIEW.canvasW / 2;
+    const centerY = PREVIEW.canvasH / 2;
 
-      if (Math.abs(nextY - mat.cy) <= SNAP_PX) {
-        nextY = mat.cy;
-        showH = true;
-      }
-    }
+    if (Math.abs(x - centerX) <= 10) x = centerX;
+    if (Math.abs(y - centerY) <= 10) y = centerY;
 
-    snapGuidesRef.current = { showV, showH };
+    x = clamp(x, matRect.x + 30, matRect.x + matRect.w - 30);
+    y = clamp(y, matRect.y + 30, matRect.y + matRect.h - 30);
 
-    setLogo((l) => ({
-      ...l,
-      x: nextX,
-      y: nextY
-    }));
-  }
+    setLogo((prev) => ({ ...prev, x, y }));
+  };
 
-  function onPointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
-    setDragging(false);
-    setResizeHandle(null);
-    resizeStartRef.current = null;
-
+  const handleCanvasPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
+      (e.target as HTMLCanvasElement).releasePointerCapture(e.pointerId);
     } catch {
-      // ignore
+      // noop
     }
+    setDragging(false);
+  };
 
-    clearSnapGuides();
-  }
+  const handleExportPng = async () => {
+    await drawPreview();
 
-  function exportPng() {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const url = canvas.toDataURL("image/png");
     const a = document.createElement("a");
-    a.href = url;
-    a.download = `carpetz-preview-${mmToCm(config.widthMm)}x${mmToCm(config.heightMm)}cm.png`;
+    a.href = canvas.toDataURL("image/png");
+    a.download = "mat-preview.png";
     a.click();
-  }
+  };
 
-  function showRenderPreview() {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  const handleReset = () => {
+    setConfig(DEFAULT_CONFIG);
+    setLogo(DEFAULT_LOGO);
+  };
 
-    const url = canvas.toDataURL("image/png");
-    setRenderPreviewUrl(url);
-
-    setStatus("Render preview gegenereerd.");
-    setTimeout(() => setStatus(""), 2500);
-  }
+  const currentPresetId = useMemo(() => {
+    const found = SIZE_PRESETS.find(
+      (p) => p.widthMm === config.widthMm && p.heightMm === config.heightMm
+    );
+    return found?.id ?? "custom";
+  }, [config.widthMm, config.heightMm]);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-      <section className="lg:col-span-5 bg-white rounded-2xl border border-neutral-200 p-5">
-        <h2 className="text-xl font-semibold">Instellingen</h2>
-        <p className="text-sm text-neutral-600 mt-1">Alle afmetingen in centimeter (cm).</p>
+    <div className="min-h-screen bg-[#f4f4f3] text-[#1e1e1e]">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-black/10 bg-white px-8 py-4">
+        <div>
+          <h1 className="text-3xl font-serif">Logo Mat Configurator</h1>
+          <p className="text-sm text-black/60">Design your custom entrance mat</p>
+        </div>
 
-        <div className="mt-5 space-y-4">
-          <div>
-            <label className="text-sm font-medium">Type mat</label>
-            <div className="mt-2 flex gap-2">
-              <ToggleButton active={config.use === "binnen"} onClick={() => setConfig((c) => ({ ...c, use: "binnen" }))}>
-                Binnen
-              </ToggleButton>
-              <ToggleButton active={config.use === "buiten"} onClick={() => setConfig((c) => ({ ...c, use: "buiten" }))}>
-                Buiten
-              </ToggleButton>
-            </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleReset}
+            className="rounded-xl border border-black/10 bg-white px-4 py-2 text-sm hover:bg-black/5"
+          >
+            Reset
+          </button>
+          <button className="rounded-xl bg-black px-5 py-2 text-sm font-medium text-white hover:bg-black/90">
+            Add to Cart
+          </button>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div className="grid grid-cols-12 gap-6 p-6">
+        {/* Left panel */}
+        <div className="col-span-3 rounded-3xl border border-black/10 bg-white p-5 shadow-sm">
+          <h2 className="mb-6 text-[32px] font-serif leading-none">Configure Your Mat</h2>
+
+          <div className="mb-5 grid grid-cols-3 gap-2 rounded-2xl bg-[#f7f7f6] p-1">
+            <button
+              onClick={() => setActiveTab("mat")}
+              className={`rounded-xl px-3 py-2 text-sm ${
+                activeTab === "mat" ? "bg-white shadow-sm" : "text-black/60"
+              }`}
+            >
+              Mat
+            </button>
+            <button
+              onClick={() => setActiveTab("colors")}
+              className={`rounded-xl px-3 py-2 text-sm ${
+                activeTab === "colors" ? "bg-white shadow-sm" : "text-black/60"
+              }`}
+            >
+              Colors
+            </button>
+            <button
+              onClick={() => setActiveTab("logo")}
+              className={`rounded-xl px-3 py-2 text-sm ${
+                activeTab === "logo" ? "bg-white shadow-sm" : "text-black/60"
+              }`}
+            >
+              Logo
+            </button>
           </div>
 
-          <div>
-            <label className="text-sm font-medium">Plaatsing</label>
-            <div className="mt-2 flex gap-2">
-              <ToggleButton active={config.placement === "vloer"} onClick={() => setConfig((c) => ({ ...c, placement: "vloer" }))}>
-                Op de vloer
-              </ToggleButton>
-              <ToggleButton
-                active={config.placement === "vloerkader"}
-                onClick={() => setConfig((c) => ({ ...c, placement: "vloerkader", rubberRand: false }))}
-              >
-                In vloerkader
-              </ToggleButton>
-            </div>
-          </div>
-
-          <div>
-            <label className="text-sm font-medium">Oriëntatie</label>
-            <div className="mt-2 flex gap-2">
-              <ToggleButton
-                active={config.orientation === "liggend"}
-                onClick={() => setConfig((c) => ({ ...c, orientation: "liggend" }))}
-              >
-                Liggend
-              </ToggleButton>
-              <ToggleButton
-                active={config.orientation === "staand"}
-                onClick={() => setConfig((c) => ({ ...c, orientation: "staand" }))}
-              >
-                Staand
-              </ToggleButton>
-            </div>
-          </div>
-
-          {config.placement !== "vloerkader" ? (
-            <div className="flex items-center justify-between gap-3">
+          {activeTab === "mat" && (
+            <div className="space-y-5">
               <div>
-                <label className="text-sm font-medium">Rubberen rand</label>
-                <p className="text-xs text-neutral-500">Dikke beschermrand rond de mat</p>
+                <label className="mb-2 block text-sm font-medium">Use</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setConfig((p) => ({ ...p, use: "binnen" }))}
+                    className={`rounded-xl border px-4 py-2 text-sm ${
+                      config.use === "binnen"
+                        ? "border-black bg-black text-white"
+                        : "border-black/10 bg-white"
+                    }`}
+                  >
+                    Indoor
+                  </button>
+                  <button
+                    onClick={() => setConfig((p) => ({ ...p, use: "buiten" }))}
+                    className={`rounded-xl border px-4 py-2 text-sm ${
+                      config.use === "buiten"
+                        ? "border-black bg-black text-white"
+                        : "border-black/10 bg-white"
+                    }`}
+                  >
+                    Outdoor
+                  </button>
+                </div>
               </div>
-              <input
-                type="checkbox"
-                className="h-5 w-5"
-                checked={config.rubberRand}
-                onChange={(e) => setConfig((c) => ({ ...c, rubberRand: e.target.checked }))}
-              />
-            </div>
-          ) : null}
 
-          <div>
-            <div>
-              <label className="text-sm font-medium">Maat</label>
-              <p className="text-xs text-neutral-500 mt-1">Kies een standaardmaat of vul een eigen maat in.</p>
-            </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium">Placement</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setConfig((p) => ({ ...p, placement: "vloer" }))}
+                    className={`rounded-xl border px-4 py-2 text-sm ${
+                      config.placement === "vloer"
+                        ? "border-black bg-black text-white"
+                        : "border-black/10 bg-white"
+                    }`}
+                  >
+                    Surface
+                  </button>
+                  <button
+                    onClick={() => setConfig((p) => ({ ...p, placement: "verzonken" }))}
+                    className={`rounded-xl border px-4 py-2 text-sm ${
+                      config.placement === "verzonken"
+                        ? "border-black bg-black text-white"
+                        : "border-black/10 bg-white"
+                    }`}
+                  >
+                    Recessed
+                  </button>
+                </div>
+              </div>
 
-            <div className="mt-2 flex flex-wrap gap-2">
-              {SIZE_PRESETS.map((p) => (
-                <ToggleButton
-                  key={p.id}
-                  active={config.presetId === p.id}
-                  onClick={() => setConfig((c) => ({ ...c, presetId: p.id }))}
-                >
-                  {getPresetLabelCm(p.widthMm, p.heightMm)}
-                </ToggleButton>
-              ))}
+              <div>
+                <label className="mb-2 block text-sm font-medium">Orientation</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => {
+                      const smallest = Math.min(config.widthMm, config.heightMm);
+                      const largest = Math.max(config.widthMm, config.heightMm);
+                      setConfig((p) => ({
+                        ...p,
+                        orientation: "liggend",
+                        widthMm: largest,
+                        heightMm: smallest,
+                      }));
+                    }}
+                    className={`rounded-xl border px-4 py-2 text-sm ${
+                      config.orientation === "liggend"
+                        ? "border-black bg-black text-white"
+                        : "border-black/10 bg-white"
+                    }`}
+                  >
+                    Landscape
+                  </button>
+                  <button
+                    onClick={() => {
+                      const smallest = Math.min(config.widthMm, config.heightMm);
+                      const largest = Math.max(config.widthMm, config.heightMm);
+                      setConfig((p) => ({
+                        ...p,
+                        orientation: "staand",
+                        widthMm: smallest,
+                        heightMm: largest,
+                      }));
+                    }}
+                    className={`rounded-xl border px-4 py-2 text-sm ${
+                      config.orientation === "staand"
+                        ? "border-black bg-black text-white"
+                        : "border-black/10 bg-white"
+                    }`}
+                  >
+                    Portrait
+                  </button>
+                </div>
+              </div>
 
-              <ToggleButton active={config.presetId === "custom"} onClick={() => setConfig((c) => ({ ...c, presetId: "custom" }))}>
-                Eigen maat
-              </ToggleButton>
-            </div>
+              <div>
+                <label className="mb-2 block text-sm font-medium">Sizes</label>
+                <div className="flex flex-wrap gap-2">
+                  {SIZE_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      onClick={() => {
+                        const smallest = Math.min(preset.widthMm, preset.heightMm);
+                        const largest = Math.max(preset.widthMm, preset.heightMm);
 
-            {config.presetId === "custom" ? (
-              <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                        setConfig((p) => ({
+                          ...p,
+                          widthMm: p.orientation === "liggend" ? largest : smallest,
+                          heightMm: p.orientation === "liggend" ? smallest : largest,
+                        }));
+                      }}
+                      className={`rounded-xl border px-3 py-2 text-sm ${
+                        currentPresetId === preset.id
+                          ? "border-black bg-black text-white"
+                          : "border-black/10 bg-white"
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
                 <div>
+                  <label className="mb-2 block text-sm font-medium">Width (cm)</label>
                   <input
                     type="number"
-                    min={20}
-                    max={400}
-                    step={1}
-                    className="w-full border border-neutral-300 rounded-xl px-3 py-2"
                     value={mmToCm(config.widthMm)}
                     onChange={(e) =>
-                      setConfig((c) => ({
-                        ...c,
-                        presetId: "custom",
-                        widthMm: cmToMm(Number(e.target.value))
+                      setConfig((p) => ({
+                        ...p,
+                        widthMm: cmToMm(Number(e.target.value || 0)),
                       }))
                     }
-                    placeholder="Breedte (cm)"
+                    className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none"
                   />
-                  <p className="text-xs text-neutral-500 mt-1">Breedte (cm)</p>
                 </div>
-
                 <div>
+                  <label className="mb-2 block text-sm font-medium">Height (cm)</label>
                   <input
                     type="number"
-                    min={20}
-                    max={400}
-                    step={1}
-                    className="w-full border border-neutral-300 rounded-xl px-3 py-2"
                     value={mmToCm(config.heightMm)}
                     onChange={(e) =>
-                      setConfig((c) => ({
-                        ...c,
-                        presetId: "custom",
-                        heightMm: cmToMm(Number(e.target.value))
+                      setConfig((p) => ({
+                        ...p,
+                        heightMm: cmToMm(Number(e.target.value || 0)),
                       }))
                     }
-                    placeholder="Hoogte (cm)"
+                    className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none"
                   />
-                  <p className="text-xs text-neutral-500 mt-1">Hoogte (cm)</p>
                 </div>
               </div>
-            ) : null}
-          </div>
 
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <label className="text-sm font-medium">Kleur mat</label>
-              <p className="text-xs text-neutral-500">Kies de basiskleur</p>
+              <label className="flex items-center gap-3 pt-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={config.rubberRand}
+                  onChange={(e) =>
+                    setConfig((p) => ({ ...p, rubberRand: e.target.checked }))
+                  }
+                />
+                Rubber border
+              </label>
             </div>
-            <input
-              type="color"
-              value={config.matColor}
-              onChange={(e) => setConfig((c) => ({ ...c, matColor: e.target.value }))}
-              className="h-10 w-12 p-1 rounded-xl border border-neutral-300 bg-white"
-            />
-          </div>
+          )}
 
-          <div>
-            <label className="text-sm font-medium">Logo upload</label>
-            <div className="mt-2 flex items-center gap-3">
+          {activeTab === "colors" && (
+            <div className="space-y-4">
+              <label className="block text-sm font-medium">Mat color</label>
+              <div className="flex gap-3">
+                {["#2d2d2d", "#1f2937", "#3f3f46", "#0f172a", "#4b5563", "#374151"].map(
+                  (color) => (
+                    <button
+                      key={color}
+                      onClick={() => setConfig((p) => ({ ...p, matColor: color }))}
+                      className={`h-10 w-10 rounded-full border-2 ${
+                        config.matColor === color ? "border-black" : "border-transparent"
+                      }`}
+                      style={{ backgroundColor: color }}
+                    />
+                  )
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === "logo" && (
+            <div className="space-y-5">
               <input
+                ref={fileInputRef}
                 type="file"
-                accept="image/*"
-                onChange={(e) => void onLogoFile(e.target.files?.[0] ?? null)}
-                className="block w-full text-sm"
+                accept="image/png,image/jpeg,image/webp"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleLogoUpload(file);
+                }}
               />
-            </div>
 
-            <div className="mt-3 flex gap-2">
               <button
-                type="button"
-                className="w-full px-3 py-2 rounded-xl bg-neutral-900 text-white hover:bg-neutral-800"
-                onClick={exportPng}
+                onClick={() => fileInputRef.current?.click()}
+                className="flex w-full flex-col items-center justify-center rounded-2xl border border-dashed border-black/15 bg-[#fafaf9] px-5 py-10 text-center hover:bg-[#f7f7f6]"
+              >
+                <div className="mb-2 text-lg">⤴</div>
+                <div className="font-medium">{logo.dataUrl ? "Replace logo" : "Upload logo"}</div>
+                <div className="text-sm text-black/55">
+                  PNG, JPG or WebP (transparent PNG recommended)
+                </div>
+              </button>
+
+              {logo.dataUrl && (
+                <div className="rounded-2xl border border-black/10 bg-[#f7f7f6] px-4 py-3 text-sm">
+                  Logo loaded successfully
+                </div>
+              )}
+
+              <div className="rounded-2xl border border-[#f4c46a] bg-[#fff8e8] px-4 py-3 text-sm text-[#9a5f00]">
+                Upload a PNG with transparent background for best results. We’ll clean soft edge pixels automatically to avoid the grey/white haze.
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium">Scale</label>
+                <input
+                  type="range"
+                  min={0.4}
+                  max={2.5}
+                  step={0.01}
+                  value={logo.scale}
+                  onChange={(e) =>
+                    setLogo((p) => ({ ...p, scale: Number(e.target.value) }))
+                  }
+                  className="w-full"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium">Rotation</label>
+                <input
+                  type="range"
+                  min={-180}
+                  max={180}
+                  step={1}
+                  value={logo.rotationDeg}
+                  onChange={(e) =>
+                    setLogo((p) => ({ ...p, rotationDeg: Number(e.target.value) }))
+                  }
+                  className="w-full"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium">Opacity</label>
+                <input
+                  type="range"
+                  min={0.2}
+                  max={1}
+                  step={0.01}
+                  value={logo.opacity}
+                  onChange={(e) =>
+                    setLogo((p) => ({ ...p, opacity: Number(e.target.value) }))
+                  }
+                  className="w-full"
+                />
+              </div>
+
+              {logo.dataUrl && (
+                <button
+                  onClick={() =>
+                    setLogo((prev) => ({
+                      ...prev,
+                      dataUrl: undefined,
+                      preparedDataUrl: undefined,
+                    }))
+                  }
+                  className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 hover:bg-red-100"
+                >
+                  Remove logo
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Middle panel */}
+        <div className="col-span-6 rounded-3xl border border-black/10 bg-white p-5 shadow-sm">
+          <div className="mb-5 flex items-center justify-between">
+            <h2 className="text-[32px] font-serif leading-none">Live Preview</h2>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleExportPng}
+                className="rounded-xl border border-black/10 bg-white px-4 py-2 text-sm hover:bg-black/5"
               >
                 Export PNG
               </button>
-
               <button
-                type="button"
-                className="w-full px-3 py-2 rounded-xl border border-neutral-300 hover:bg-neutral-50"
-                onClick={showRenderPreview}
+                onClick={drawPreview}
+                className="rounded-xl bg-black px-4 py-2 text-sm text-white hover:bg-black/90"
               >
-                Render preview
+                {rendering ? "Rendering..." : "Render Preview"}
               </button>
             </div>
-
-            {status ? (
-              <p className="mt-3 text-sm text-neutral-700 bg-neutral-100 border border-neutral-200 rounded-xl p-3">{status}</p>
-            ) : null}
           </div>
-        </div>
-      </section>
 
-      <section className="lg:col-span-7 bg-white rounded-2xl border border-neutral-200 p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold">Preview</h2>
-            <p className="text-sm text-neutral-600 mt-1">
-              Klik op het logo om te selecteren. Sleep om te verplaatsen (snapt naar midden). Delete/Backspace verwijdert
-              het logo.
-            </p>
-          </div>
-          <span className="text-xs text-neutral-500">
-            Canvas: {PREVIEW.canvasW}×{PREVIEW.canvasH}px
-          </span>
-        </div>
-
-        <div className="mt-4 rounded-2xl border border-neutral-200 overflow-hidden bg-neutral-50">
-          <canvas
-            ref={canvasRef}
-            width={PREVIEW.canvasW}
-            height={PREVIEW.canvasH}
-            className="w-full h-auto touch-none"
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onPointerCancel={onPointerUp}
-          />
-        </div>
-
-        <p className="mt-3 text-xs text-neutral-500">Tip: upload liefst een PNG met transparante achtergrond.</p>
-
-        <div className="mt-3 text-xs text-neutral-500">
-          Actuele maat (B × H): {mmToCm(config.widthMm)} × {mmToCm(config.heightMm)} cm
-        </div>
-      </section>
-
-      {renderPreviewUrl ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6"
-          onClick={() => setRenderPreviewUrl(null)}
-        >
-          <div className="w-full max-w-4xl rounded-2xl bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-3 flex items-center justify-between">
-              <div className="font-semibold">Render preview</div>
-              <button
-                className="rounded-xl border border-neutral-300 px-3 py-2 hover:bg-neutral-50"
-                onClick={() => setRenderPreviewUrl(null)}
-              >
-                Sluiten
-              </button>
-            </div>
-
-            <img
-              src={renderPreviewUrl}
-              alt="Gerenderde logomat preview"
-              className="w-full h-auto rounded-xl border border-neutral-200"
+          <div className="rounded-2xl bg-[#f3f2f0] p-4">
+            <canvas
+              ref={canvasRef}
+              width={PREVIEW.canvasW}
+              height={PREVIEW.canvasH}
+              onPointerDown={handleCanvasPointerDown}
+              onPointerMove={handleCanvasPointerMove}
+              onPointerUp={handleCanvasPointerUp}
+              onPointerLeave={handleCanvasPointerUp}
+              className="h-auto w-full cursor-move rounded-2xl"
             />
+          </div>
 
-            <div className="mt-3 flex gap-2">
-              <a
-                href={renderPreviewUrl}
-                download={`carpetz-render-preview-${mmToCm(config.widthMm)}x${mmToCm(config.heightMm)}cm.png`}
-                className="rounded-xl bg-neutral-900 text-white px-4 py-2 hover:bg-neutral-800"
-              >
-                Download PNG
-              </a>
-              <button
-                className="rounded-xl border border-neutral-300 px-4 py-2 hover:bg-neutral-50"
-                onClick={() => setRenderPreviewUrl(null)}
-              >
-                OK
-              </button>
+          <div className="mt-4 flex items-center justify-between text-sm text-black/60">
+            <div>Canvas: {PREVIEW.canvasW} × {PREVIEW.canvasH} px</div>
+            <div>
+              Mat size: {Math.min(mmToCm(config.widthMm), mmToCm(config.heightMm))} ×{" "}
+              {Math.max(mmToCm(config.widthMm), mmToCm(config.heightMm))} cm
             </div>
           </div>
         </div>
-      ) : null}
+
+        {/* Right panel */}
+        <div className="col-span-3 rounded-3xl border border-black/10 bg-white p-5 shadow-sm">
+          <h2 className="mb-6 text-[32px] font-serif leading-none">Price Calculator</h2>
+
+          <div className="space-y-3 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-black/60">Mat type</span>
+              <span>{config.use === "binnen" ? "Indoor" : "Outdoor"}</span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-black/60">Size</span>
+              <span>{selectedSizeLabel}</span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-black/60">Rubber border</span>
+              <span className={config.rubberRand ? "text-green-600" : ""}>
+                {config.rubberRand ? "+15%" : "No"}
+              </span>
+            </div>
+
+            <div className="my-4 border-t border-black/10" />
+
+            <div className="flex items-center justify-between">
+              <span className="text-black/60">Unit price</span>
+              <span>€{price.unit.toFixed(2)}</span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-black/60">Quantity</span>
+              <span>×1</span>
+            </div>
+
+            <div className="my-4 border-t border-black/10" />
+
+            <div className="flex items-center justify-between">
+              <span className="text-black/60">Subtotal</span>
+              <span>€{price.unit.toFixed(2)}</span>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <span className="text-black/60">VAT (21%)</span>
+              <span>€{price.vat.toFixed(2)}</span>
+            </div>
+
+            <div className="my-4 border-t border-black/10" />
+
+            <div className="flex items-center justify-between text-[18px] font-semibold">
+              <span>Total</span>
+              <span>€{price.total.toFixed(2)}</span>
+            </div>
+
+            <div className="pt-4 text-xs text-black/50">
+              <div className="mb-1 font-medium text-black/60">Volume discounts:</div>
+              <ul className="list-disc pl-4">
+                <li>5–9 units: 5% off</li>
+                <li>10–24 units: 10% off</li>
+                <li>25–49 units: 15% off</li>
+                <li>50+ units: 20% off</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-function ToggleButton({
-  active,
-  onClick,
-  children
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "px-3 py-2 rounded-xl border text-sm transition",
-        active ? "bg-neutral-900 text-white border-neutral-900" : "bg-white text-neutral-800 border-neutral-300 hover:bg-neutral-50"
-      ].join(" ")}
-    >
-      {children}
-    </button>
-  );
+/* ---------------------------- Helpers drawing ---------------------------- */
+
+function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number
+) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+function shadeColor(color: string, amount: number) {
+  const match = color.match(/\d+/g);
+  if (!match || match.length < 3) return color;
+
+  const [r, g, b] = match.map(Number);
+
+  return `rgb(${clamp(r + amount, 0, 255)}, ${clamp(g + amount, 0, 255)}, ${clamp(
+    b + amount,
+    0,
+    255
+  )})`;
 }
